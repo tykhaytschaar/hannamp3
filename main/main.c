@@ -1,0 +1,65 @@
+#include <stdio.h>
+#include "esp_log.h"
+#include "esp_heap_caps.h"
+#include "nvs_flash.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "driver/gpio.h"
+
+#include "app_config.h"
+#include "sd.h"
+#include "audio.h"
+#include "ui.h"
+#include "io.h"
+#include "player.h"
+#include "cli.h"
+
+// Mindkét CS lábat explicit HIGH-ra húzzuk MIELŐTT a SPI master bármit
+// elkezdene csinálni. Így a köztes időben (SD init → LCD init) sem lebeg
+// egyik chip select sem — a panel chip nem értelmezi a SD-nek szóló MOSI
+// byteokat sajátnak.
+static void pre_init_cs_pins(void)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask = (1ULL << PIN_TFT_CS) | (1ULL << PIN_SD_CS),
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&cfg);
+    gpio_set_level(PIN_TFT_CS, 1);
+    gpio_set_level(PIN_SD_CS, 1);
+}
+
+
+static const char *TAG = "main";
+
+void app_main(void)
+{
+    ESP_LOGI(TAG, "hannamp3 boot");
+
+    esp_err_t err = nvs_flash_init();
+    if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        nvs_flash_erase();
+        nvs_flash_init();
+    }
+
+    // CS-eket még a SPI inicializálás előtt HIGH-ra — különben a köztes
+    // pillanatban a TFT chip lebegő CS-szel SD adatokat venne fel.
+    pre_init_cs_pins();
+
+    // Sorrend fontos: SD a SPI buszt is inicializálja, amit az UI újrahasznosít.
+    sd_init();
+    ui_init();
+    audio_init();
+    io_init();
+
+    player_start();
+    cli_init();
+
+    ESP_LOGI(TAG, "init done, free heap=%lu internal=%lu psram=%lu",
+             (unsigned long)esp_get_free_heap_size(),
+             (unsigned long)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned long)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+}

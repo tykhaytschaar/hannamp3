@@ -1,0 +1,19 @@
+idf_component_register(
+    SRCS
+        "main.c"
+        "sd.c"
+        "audio.c"
+        "ui.c"
+        "io.c"
+        "player.c"
+        "cli.c"
+    INCLUDE_DIRS "."
+    REQUIRES
+        driver
+        esp_lcd
+        esp_adc
+        esp_timer
+        fatfs
+        sdmmc
+        nvs_flash
+)
