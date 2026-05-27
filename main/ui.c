@@ -33,55 +33,57 @@ static lv_obj_t *list_view;
 
 static char s_cover_path[MAX_PATH_LEN];
 
-// 240×320 álló layout
+// 320×240 fekvő layout
 static void ui_build_screen(void)
 {
     lv_obj_t *scr = lv_screen_active();
     lv_obj_set_style_bg_color(scr, lv_color_black(), 0);
     lv_obj_set_style_text_color(scr, lv_color_white(), 0);
+    lv_obj_set_style_pad_all(scr, 0, 0);
 
     img_cover = lv_image_create(scr);
-    lv_obj_set_size(img_cover, 160, 160);
+    lv_obj_set_size(img_cover, 128, 128);
     lv_obj_align(img_cover, LV_ALIGN_TOP_LEFT, 8, 8);
     lv_obj_set_style_bg_color(img_cover, lv_color_hex(0x202020), 0);
     lv_obj_set_style_bg_opa(img_cover, LV_OPA_COVER, 0);
 
+    lbl_battery = lv_label_create(scr);
+    lv_obj_align(lbl_battery, LV_ALIGN_TOP_RIGHT, -8, 8);
+    lv_label_set_text(lbl_battery, LV_SYMBOL_BATTERY_FULL " ---");
+
     // Cím — scroll helyett "..." levágás (scroll megakasztaná az audiót).
     lbl_title = lv_label_create(scr);
     lv_label_set_long_mode(lbl_title, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(lbl_title, 224);
-    lv_obj_align(lbl_title, LV_ALIGN_TOP_LEFT, 8, 176);
+    lv_obj_set_width(lbl_title, 168);
+    lv_obj_align(lbl_title, LV_ALIGN_TOP_LEFT, 144, 8);
     lv_obj_set_style_text_font(lbl_title, &lv_font_montserrat_18, 0);
     lv_label_set_text(lbl_title, "—");
 
-    lbl_state = lv_label_create(scr);
-    lv_obj_align(lbl_state, LV_ALIGN_TOP_LEFT, 8, 202);
-    lv_label_set_text(lbl_state, LV_SYMBOL_PAUSE);
+    lbl_time = lv_label_create(scr);
+    lv_obj_align(lbl_time, LV_ALIGN_TOP_LEFT, 144, 46);
+    lv_label_set_text(lbl_time, "0:00 / 0:00");
 
     bar_progress = lv_bar_create(scr);
-    lv_obj_set_size(bar_progress, 224, 6);
-    lv_obj_align(bar_progress, LV_ALIGN_TOP_LEFT, 8, 224);
+    lv_obj_set_size(bar_progress, 168, 6);
+    lv_obj_align(bar_progress, LV_ALIGN_TOP_LEFT, 144, 70);
     lv_bar_set_range(bar_progress, 0, 1000);
     lv_bar_set_value(bar_progress, 0, LV_ANIM_OFF);
 
-    lbl_time = lv_label_create(scr);
-    lv_obj_align(lbl_time, LV_ALIGN_TOP_LEFT, 8, 236);
-    lv_label_set_text(lbl_time, "0:00 / 0:00");
+    lbl_state = lv_label_create(scr);
+    lv_obj_align(lbl_state, LV_ALIGN_TOP_LEFT, 144, 86);
+    lv_label_set_text(lbl_state, LV_SYMBOL_PAUSE);
 
     lbl_volume = lv_label_create(scr);
-    lv_obj_align(lbl_volume, LV_ALIGN_TOP_RIGHT, -8, 236);
+    lv_obj_align(lbl_volume, LV_ALIGN_TOP_LEFT, 172, 86);
     lv_label_set_text(lbl_volume, LV_SYMBOL_VOLUME_MAX " 70%");
 
-    lbl_battery = lv_label_create(scr);
-    lv_obj_align(lbl_battery, LV_ALIGN_BOTTOM_RIGHT, -8, -4);
-    lv_label_set_text(lbl_battery, LV_SYMBOL_BATTERY_FULL " ---");
-
     list_view = lv_list_create(scr);
-    lv_obj_set_size(list_view, 224, 60);
-    lv_obj_align(list_view, LV_ALIGN_BOTTOM_LEFT, 8, -20);
+    lv_obj_set_size(list_view, 304, 84);
+    lv_obj_align(list_view, LV_ALIGN_BOTTOM_LEFT, 8, -8);
     lv_obj_set_style_bg_color(list_view, lv_color_black(), 0);
     lv_obj_set_style_text_color(list_view, lv_color_white(), 0);
     lv_obj_set_style_border_width(list_view, 0, 0);
+    lv_obj_set_style_pad_all(list_view, 2, 0);
 }
 
 void ui_init(void)
@@ -112,8 +114,8 @@ void ui_init(void)
     vTaskDelay(pdMS_TO_TICKS(100));            // extra idő a chipnek reset után
     esp_lcd_panel_init(panel);
     esp_lcd_panel_invert_color(panel, true);   // IPS ST7789 szinte mindig kell
-    esp_lcd_panel_swap_xy(panel, false);
-    esp_lcd_panel_mirror(panel, false, false);
+    // A rotációt NEM itt állítjuk — az esp_lvgl_port a disp_cfg.rotation
+    // alapján felülírná. A fekvő beállítás lentebb, a disp_cfg-ban van.
     esp_lcd_panel_disp_on_off(panel, true);
 
     // ---- LVGL port ----
@@ -131,9 +133,8 @@ void ui_init(void)
         .hres = LCD_H_RES,
         .vres = LCD_V_RES,
         .monochrome = false,
-        // A panel hardver-rotációja már beállítva fent (swap_xy + mirror_y),
-        // így LVGL felé NE szóljunk rotációról — különben kétszer rotálódna.
-        .rotation = { .swap_xy = false, .mirror_x = false, .mirror_y = false },
+        // Fekvő, 90° CCW — ezt a port alkalmazza a panelra (egyszer).
+        .rotation = { .swap_xy = true, .mirror_x = false, .mirror_y = true },
         .flags = { .buff_dma = true, .buff_spiram = false },
     };
     s_disp = lvgl_port_add_disp(&disp_cfg);
