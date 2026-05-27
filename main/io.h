@@ -7,8 +7,9 @@ typedef enum {
     BTN_EVT_NEXT,
     BTN_EVT_PREV,
     BTN_EVT_MENU,
-    BTN_EVT_VOL_UP,     // MENU long press → vol up cycle
-    BTN_EVT_VOL_DOWN,   // PREV long press
+    BTN_EVT_MENU_LONG,  // MENU long press — rescan SD (player.c kezeli)
+    BTN_EVT_VOL_UP,
+    BTN_EVT_VOL_DOWN,
 } btn_event_t;
 
 // Callback típus: a player.c regisztrál rá.

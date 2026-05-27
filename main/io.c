@@ -71,6 +71,29 @@ static void setup_button(int gpio, btn_event_t evt, bool repeat_on_hold)
     }
 }
 
+// MENU külön kezelést kap: short = screen váltás, long = SD rescan.
+static void setup_menu_button(int gpio)
+{
+    button_config_t cfg = {
+        .type = BUTTON_TYPE_GPIO,
+        .long_press_time = 800,
+        .short_press_time = 80,
+        .gpio_button_config = {
+            .gpio_num     = gpio,
+            .active_level = 0,
+        },
+    };
+    button_handle_t h = iot_button_create(&cfg);
+    if (!h) {
+        ESP_LOGE(TAG, "iot_button_create failed for GPIO %d", gpio);
+        return;
+    }
+    iot_button_register_cb(h, BUTTON_SINGLE_CLICK,    on_btn,
+                           (void *)(intptr_t)BTN_EVT_MENU);
+    iot_button_register_cb(h, BUTTON_LONG_PRESS_START, on_btn,
+                           (void *)(intptr_t)BTN_EVT_MENU_LONG);
+}
+
 uint8_t io_battery_percent_from_mv(uint16_t mv)
 {
     if (mv >= BAT_FULL_MV)  return 100;
@@ -115,7 +138,7 @@ void io_init(void)
     setup_button(PIN_BTN_PLAY,     BTN_EVT_PLAY_PAUSE, false);
     setup_button(PIN_BTN_NEXT,     BTN_EVT_NEXT,       false);
     setup_button(PIN_BTN_PREV,     BTN_EVT_PREV,       false);
-    setup_button(PIN_BTN_MENU,     BTN_EVT_MENU,       false);
+    setup_menu_button(PIN_BTN_MENU);                              // short + long
     setup_button(PIN_BTN_VOL_UP,   BTN_EVT_VOL_UP,     true);   // hold = ramp
     setup_button(PIN_BTN_VOL_DOWN, BTN_EVT_VOL_DOWN,   true);
 

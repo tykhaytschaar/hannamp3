@@ -46,9 +46,19 @@ void player_handle_button(btn_event_t evt)
     audio_status_t st;
     audio_get_status(&st);
 
+    ui_screen_t scr = ui_current_screen();
+
     switch (evt) {
     case BTN_EVT_PLAY_PAUSE:
-        if (st.state == AUDIO_STATE_PLAYING) {
+        if (scr == UI_SCREEN_LIBRARY) {
+            // Library: a kurzoron lévő trackre ugrunk és indítjuk.
+            int sel = ui_library_get_selected_index();
+            if (sel >= 0 && sel < s_count) {
+                s_idx = sel;
+                play_current();
+                ui_show_screen(UI_SCREEN_NOW_PLAYING);
+            }
+        } else if (st.state == AUDIO_STATE_PLAYING) {
             audio_pause();
             ui_set_playing(false);
         } else if (st.state == AUDIO_STATE_PAUSED) {
@@ -58,8 +68,14 @@ void player_handle_button(btn_event_t evt)
             play_current();
         }
         break;
+
     case BTN_EVT_NEXT:
     case BTN_EVT_PREV: {
+        if (scr == UI_SCREEN_LIBRARY) {
+            // Library: csak a kurzort mozgatjuk, a lejátszást nem zavarjuk.
+            ui_library_move_cursor(evt == BTN_EVT_NEXT ? +1 : -1);
+            break;
+        }
         bool was_playing = (st.state == AUDIO_STATE_PLAYING);
         if (evt == BTN_EVT_NEXT) s_idx++;
         else                     s_idx--;
@@ -75,12 +91,20 @@ void player_handle_button(btn_event_t evt)
         }
         break;
     }
+
     case BTN_EVT_MENU:
-        // Most: re-scan + play
+        // Rövid nyomás: ciklikus screen váltás.
+        ui_next_screen();
+        break;
+
+    case BTN_EVT_MENU_LONG:
+        // Hosszú nyomás: SD rescan, mint korábban a sima MENU.
         s_count = sd_scan_tracks(s_tracks, MAX_TRACKS);
+        ui_set_track_count(s_count);
         s_idx = 0;
         play_current();
         break;
+
     case BTN_EVT_VOL_UP: {
         uint8_t v = audio_get_volume();
         v = (v + 2 > 100) ? 100 : v + 2;
@@ -143,6 +167,7 @@ void player_start(void)
     // UI alapállapot
     audio_set_volume(70);
     ui_set_volume(70);
+    ui_set_track_count(s_count);
     uint16_t mv = io_read_battery_mv();
     ui_set_battery(mv, io_battery_percent_from_mv(mv));
 
