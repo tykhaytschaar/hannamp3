@@ -34,6 +34,10 @@ CONFIG_ESP_MAIN_TASK_STACK_SIZE=16384
 # konkrét hibaüzenetet kapunk a task nevével.
 CONFIG_FREERTOS_CHECK_STACKOVERFLOW_CANARY=y
 
+# A fizikai gombok callbackjei az esp_timer taskban futnak, és FATFS+LVGL
+# munkát végeznek (browser_activate) — a default 3584 kevés.
+CONFIG_ESP_TIMER_TASK_STACK_SIZE=8192
+
 # Console az UART0-ra (a dev kit "COMM"/"UART" portjára).
 # Ha natív USB-ről akarsz monitorozni, kapcsold ezt USB_SERIAL_JTAG-re.
 CONFIG_ESP_CONSOLE_UART_DEFAULT=y
@@ -46,6 +50,9 @@ CONFIG_FATFS_CODEPAGE_852=y
 # LVGL
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_MEM_CUSTOM=y
+# Az egyedi fontok (mp3_inter_*) tömörített glyph-bitmappel készültek (bpp=4),
+# ehhez kell a font-dekompresszió, különben minden betű üres téglalap.
+CONFIG_LV_USE_FONT_COMPRESSED=y
 CONFIG_LV_USE_FS_POSIX=y
 CONFIG_LV_FS_POSIX_LETTER=83
 CONFIG_LV_FS_POSIX_PATH=""

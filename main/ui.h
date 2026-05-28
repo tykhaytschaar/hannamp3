@@ -49,10 +49,13 @@ void        ui_show_screen(ui_screen_t s);
 void        ui_next_screen(void);
 ui_screen_t ui_current_screen(void);
 
-// Library cursor — csak akkor van értelme, ha UI_SCREEN_LIBRARY az aktív.
-// delta = +1 → lefelé, -1 → felfelé. Túlcsordulás esetén wrap-around.
-void ui_library_move_cursor(int delta);
-int  ui_library_get_selected_index(void);
+// Library = fájlböngésző. A player.c birtokolja a navigációs állapotot
+// (aktuális könyvtár + kurzor), és ezeken keresztül rajzoltat:
+//   ui_browser_show()       — teljes lista újraépítés (path + bejegyzések)
+//   ui_browser_set_cursor() — csak a kijelölés mozgatása + görgetés
+void ui_browser_show(const char *path, const dir_entry_t *entries,
+                     int count, int cursor);
+void ui_browser_set_cursor(int cursor);
 
 // Tájékoztató panel a Settings képernyőn — a player.c rescan után frissíti.
 void ui_set_track_count(int count);

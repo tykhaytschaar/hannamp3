@@ -1,8 +1,12 @@
+#include <stdio.h>
 #include <string.h>
+#include <dirent.h>
+#include <sys/stat.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "nvs.h"
 
 #include "app_config.h"
 #include "sd.h"
@@ -13,9 +17,80 @@
 
 static const char *TAG = "player";
 
+// Lejátszási kontextus: az ÉPP játszott mappa MP3-jai (auto-next ezen megy végig).
 static track_t *s_tracks = NULL;
 static int      s_count  = 0;
 static int      s_idx    = 0;
+
+// Böngésző navigációs állapot (Library képernyő) — független a lejátszástól.
+static dir_entry_t *s_bentries = NULL;
+static int          s_bcount   = 0;
+static int          s_bcursor  = 0;
+static char         s_bpath[384];   // aktuális könyvtár, SD_MOUNT_POINT-ról indul
+
+// --- NVS perzisztencia: böngészett könyvtár + utoljára nyitott fájl ---
+#define NVS_NS  "player"
+
+static void persist_set_str(const char *key, const char *val)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_str(h, key, val ? val : "");
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static bool persist_get_str(const char *key, char *out, size_t out_sz)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return false;
+    size_t len = out_sz;
+    esp_err_t e = nvs_get_str(h, key, out, &len);
+    nvs_close(h);
+    return e == ESP_OK;
+}
+
+static void browser_refresh(void)
+{
+    persist_set_str("br_dir", s_bpath);   // jegyezzük meg a böngészett könyvtárat
+    s_bcount = sd_list_dir(s_bpath, s_bentries, MAX_DIR_ENTRIES);
+    if (s_bcursor >= s_bcount) s_bcursor = s_bcount > 0 ? s_bcount - 1 : 0;
+    if (s_bcursor < 0) s_bcursor = 0;
+    ui_browser_show(s_bpath, s_bentries, s_bcount, s_bcursor);
+}
+
+static void browser_move_cursor(int delta)
+{
+    if (s_bcount == 0) return;
+    int c = s_bcursor + delta;
+    while (c < 0)         c += s_bcount;
+    while (c >= s_bcount) c -= s_bcount;
+    s_bcursor = c;
+    ui_browser_set_cursor(s_bcursor);
+}
+
+static void browser_enter(void)
+{
+    if (s_bcount == 0 || !s_bentries[s_bcursor].is_dir) return;
+    size_t len = strlen(s_bpath);
+    snprintf(s_bpath + len, sizeof(s_bpath) - len, "/%s", s_bentries[s_bcursor].name);
+    s_bcursor = 0;
+    browser_refresh();
+}
+
+static void browser_up(void)
+{
+    if (strcmp(s_bpath, SD_MOUNT_POINT) == 0) return;   // gyökérnél nem megyünk feljebb
+    char *slash = strrchr(s_bpath, '/');
+    if (slash) {
+        *slash = 0;
+        if (strlen(s_bpath) < strlen(SD_MOUNT_POINT)) {
+            strcpy(s_bpath, SD_MOUNT_POINT);
+        }
+    }
+    s_bcursor = 0;
+    browser_refresh();
+}
 
 static void select_current(bool autoplay)
 {
@@ -28,6 +103,7 @@ static void select_current(bool autoplay)
 
     ui_show_track(&s_tracks[s_idx]);
     ui_set_playlist(s_tracks, s_count, s_idx);
+    persist_set_str("last_file", s_tracks[s_idx].path);   // utoljára nyitott fájl
     if (autoplay) {
         ui_set_playing(true);
         audio_play(s_tracks[s_idx].path);
@@ -41,6 +117,27 @@ static void play_current(void)
     select_current(true);
 }
 
+// Play a böngészőben: mappán állva belép, fájlon állva betölti a mappa
+// MP3-jait lejátszási listának és elindítja a kiválasztott számot.
+static void browser_activate(void)
+{
+    if (s_bcount == 0) return;
+    if (s_bentries[s_bcursor].is_dir) {
+        browser_enter();
+        return;
+    }
+    // Fájl: a böngészett mappa összes MP3-ja lesz a lejátszási lista (album).
+    char target[512];
+    snprintf(target, sizeof(target), "%.383s/%.127s", s_bpath, s_bentries[s_bcursor].name);
+    s_count = sd_load_dir_tracks(s_bpath, s_tracks, MAX_TRACKS);
+    s_idx = 0;
+    for (int i = 0; i < s_count; i++) {
+        if (strcmp(s_tracks[i].path, target) == 0) { s_idx = i; break; }
+    }
+    play_current();
+    ui_show_screen(UI_SCREEN_NOW_PLAYING);
+}
+
 void player_handle_button(btn_event_t evt)
 {
     audio_status_t st;
@@ -51,13 +148,8 @@ void player_handle_button(btn_event_t evt)
     switch (evt) {
     case BTN_EVT_PLAY_PAUSE:
         if (scr == UI_SCREEN_LIBRARY) {
-            // Library: a kurzoron lévő trackre ugrunk és indítjuk.
-            int sel = ui_library_get_selected_index();
-            if (sel >= 0 && sel < s_count) {
-                s_idx = sel;
-                play_current();
-                ui_show_screen(UI_SCREEN_NOW_PLAYING);
-            }
+            // Library: fájlon = lejátszás, mappán = belépés.
+            browser_activate();
         } else if (st.state == AUDIO_STATE_PLAYING) {
             audio_pause();
             ui_set_playing(false);
@@ -72,8 +164,9 @@ void player_handle_button(btn_event_t evt)
     case BTN_EVT_NEXT:
     case BTN_EVT_PREV: {
         if (scr == UI_SCREEN_LIBRARY) {
-            // Library: csak a kurzort mozgatjuk, a lejátszást nem zavarjuk.
-            ui_library_move_cursor(evt == BTN_EVT_NEXT ? +1 : -1);
+            // Library böngésző: Next = be a mappába, Prev = ki a szülőbe.
+            if (evt == BTN_EVT_NEXT) browser_enter();
+            else                     browser_up();
             break;
         }
         bool was_playing = (st.state == AUDIO_STATE_PLAYING);
@@ -98,27 +191,30 @@ void player_handle_button(btn_event_t evt)
         break;
 
     case BTN_EVT_MENU_LONG:
-        // Hosszú nyomás: SD rescan, mint korábban a sima MENU.
-        s_count = sd_scan_tracks(s_tracks, MAX_TRACKS);
-        ui_set_track_count(s_count);
-        s_idx = 0;
-        play_current();
+        // Hosszú nyomás: az aktuális böngészett könyvtár újraolvasása.
+        browser_refresh();
         break;
 
-    case BTN_EVT_VOL_UP: {
-        uint8_t v = audio_get_volume();
-        v = (v + 2 > 100) ? 100 : v + 2;
-        audio_set_volume(v);
-        ui_set_volume(v);
+    case BTN_EVT_VOL_UP:
+        if (scr == UI_SCREEN_LIBRARY) {
+            browser_move_cursor(-1);   // böngészőben: kurzor fel
+        } else {
+            uint8_t v = audio_get_volume();
+            v = (v + 2 > 100) ? 100 : v + 2;
+            audio_set_volume(v);
+            ui_set_volume(v);
+        }
         break;
-    }
-    case BTN_EVT_VOL_DOWN: {
-        uint8_t v = audio_get_volume();
-        v = (v < 2) ? 0 : v - 2;
-        audio_set_volume(v);
-        ui_set_volume(v);
+    case BTN_EVT_VOL_DOWN:
+        if (scr == UI_SCREEN_LIBRARY) {
+            browser_move_cursor(+1);   // böngészőben: kurzor le
+        } else {
+            uint8_t v = audio_get_volume();
+            v = (v < 2) ? 0 : v - 2;
+            audio_set_volume(v);
+            ui_set_volume(v);
+        }
         break;
-    }
     }
 }
 
@@ -154,11 +250,12 @@ static void player_task(void *arg)
 void player_start(void)
 {
     s_tracks = heap_caps_calloc(MAX_TRACKS, sizeof(track_t), MALLOC_CAP_SPIRAM);
-    if (!s_tracks) {
-        ESP_LOGE(TAG, "track buffer alloc failed");
+    s_bentries = heap_caps_calloc(MAX_DIR_ENTRIES, sizeof(dir_entry_t), MALLOC_CAP_SPIRAM);
+    if (!s_tracks || !s_bentries) {
+        ESP_LOGE(TAG, "buffer alloc failed");
         return;
     }
-    s_count = sd_scan_tracks(s_tracks, MAX_TRACKS);
+    s_count = 0;
     s_idx   = 0;
 
     io_register_button_cb(player_handle_button);
@@ -167,16 +264,50 @@ void player_start(void)
     // UI alapállapot
     audio_set_volume(70);
     ui_set_volume(70);
-    ui_set_track_count(s_count);
     uint16_t mv = io_read_battery_mv();
     ui_set_battery(mv, io_battery_percent_from_mv(mv));
 
-    if (s_count > 0) {
-        ui_show_track(&s_tracks[0]);
-        ui_set_playlist(s_tracks, s_count, 0);
-        ui_set_playing(false);
-    } else {
+    // Böngésző: ha van mentett könyvtár és még létezik, oda térünk vissza,
+    // különben az SD gyökeréből indulunk.
+    strcpy(s_bpath, SD_MOUNT_POINT);
+    char saved_dir[sizeof(s_bpath)];
+    if (persist_get_str("br_dir", saved_dir, sizeof(saved_dir)) && saved_dir[0]) {
+        DIR *d = opendir(saved_dir);
+        if (d) { closedir(d); strcpy(s_bpath, saved_dir); }
+    }
+    s_bcursor = 0;
+    browser_refresh();
+    ui_set_track_count(s_bcount);
+
+    // Utoljára nyitott fájl visszaállítása (ha még létezik): betöltjük a
+    // mappáját lejátszási listának és a Now Playing-en mutatjuk — de NEM
+    // indítjuk el automatikusan.
+    bool restored = false;
+    char last_file[384];
+    if (persist_get_str("last_file", last_file, sizeof(last_file)) && last_file[0]) {
+        struct stat stt;
+        if (stat(last_file, &stt) == 0) {
+            char folder[384];
+            strncpy(folder, last_file, sizeof(folder) - 1);
+            folder[sizeof(folder) - 1] = 0;
+            char *slash = strrchr(folder, '/');
+            if (slash) *slash = 0;
+            s_count = sd_load_dir_tracks(folder, s_tracks, MAX_TRACKS);
+            for (int i = 0; i < s_count; i++) {
+                if (strcmp(s_tracks[i].path, last_file) == 0) {
+                    s_idx = i;
+                    select_current(false);   // mutat, de nem játszik
+                    restored = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    // Ha nincs mit visszaállítani (nincs SD / törölt fájl), üres Now Playing.
+    if (!restored) {
         ui_show_no_track();
+        ui_set_playing(false);
     }
 
     xTaskCreate(player_task, "player", 4096, NULL, 4, NULL);

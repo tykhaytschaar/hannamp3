@@ -52,6 +52,7 @@
 #define SD_MOUNT_POINT      "/sdcard"
 #define MUSIC_DIR           "/sdcard/music"
 #define MAX_TRACKS          128
+#define MAX_DIR_ENTRIES     128
 #define MAX_PATH_LEN        256
 
 // -----------------------------------------------------------------------------

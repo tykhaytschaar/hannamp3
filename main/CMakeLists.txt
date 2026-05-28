@@ -7,7 +7,10 @@ idf_component_register(
         "io.c"
         "player.c"
         "cli.c"
-    INCLUDE_DIRS "."
+        "fonts/mp3_inter_12.c"
+        "fonts/mp3_inter_14.c"
+        "fonts/mp3_inter_18.c"
+    INCLUDE_DIRS "." "fonts"
     REQUIRES
         driver
         esp_lcd

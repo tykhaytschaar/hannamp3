@@ -136,5 +136,7 @@ static void cli_task(void *arg)
 void cli_init(void)
 {
     uart_driver_install(CLI_UART, 512, 0, 0, NULL, 0);
-    xTaskCreate(cli_task, "cli", 4096, NULL, 3, NULL);
+    // 8192: a parancsok player_handle_button-t hívnak, ami FATFS könyvtár-
+    // szkennt + LVGL rebuildet csinálhat (browser_activate) — 4096 kevés.
+    xTaskCreate(cli_task, "cli", 8192, NULL, 3, NULL);
 }

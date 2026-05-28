@@ -163,3 +163,46 @@ bool sd_find_album_art(const char *mp3_path, char *out_path, int out_path_len)
     }
     return false;
 }
+
+// Mappák előre, fájlok hátra; azon belül ábécé (kis/nagybetű-független).
+static int cmp_entries(const void *a, const void *b)
+{
+    const dir_entry_t *ea = a, *eb = b;
+    if (ea->is_dir != eb->is_dir) return ea->is_dir ? -1 : 1;
+    return strcasecmp(ea->name, eb->name);
+}
+
+int sd_list_dir(const char *path, dir_entry_t *out, int max_entries)
+{
+    if (!s_card) return 0;
+    DIR *d = opendir(path);
+    if (!d) {
+        ESP_LOGW(TAG, "opendir failed: %s", path);
+        return 0;
+    }
+    int n = 0;
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL && n < max_entries) {
+        if (e->d_name[0] == '.') continue;
+        bool is_dir = (e->d_type == DT_DIR);
+        if (!is_dir && !has_ext(e->d_name, ".mp3")) continue;  // csak mappa + mp3
+        strncpy(out[n].name, e->d_name, sizeof(out[n].name) - 1);
+        out[n].name[sizeof(out[n].name) - 1] = 0;
+        out[n].is_dir = is_dir;
+        n++;
+    }
+    closedir(d);
+    qsort(out, n, sizeof(dir_entry_t), cmp_entries);
+    return n;
+}
+
+int sd_load_dir_tracks(const char *path, track_t *out, int max_tracks)
+{
+    if (!s_card) return 0;
+    // album név = az út utolsó komponense
+    const char *album = strrchr(path, '/');
+    album = album ? album + 1 : path;
+    int n = scan_album_dir(path, album, out, 0, max_tracks);
+    qsort(out, n, sizeof(track_t), cmp_tracks);
+    return n;
+}

@@ -16,6 +16,7 @@
 
 #include "app_config.h"
 #include "ui.h"
+#include "mp3_fonts.h"
 
 static const char *TAG = "ui";
 
@@ -54,8 +55,9 @@ typedef struct {
     lv_obj_t *np_lbl_volume;
     lv_obj_t *np_mini_list;
 
-    // Library widgets
+    // Library (fájlböngésző) widgetek
     lv_obj_t *lib_list;
+    lv_obj_t *lib_path;   // aktuális könyvtár fejléc
 
     // Settings widgets
     lv_obj_t *set_val_volume;
@@ -63,11 +65,15 @@ typedef struct {
     lv_obj_t *set_val_tracks;
     lv_obj_t *set_val_heap;
 
-    // Library data (pointers owned by player.c; lifetime spans the app)
+    // Now Playing mini-lista adatai (a játszó album, player.c birtokolja)
     const track_t *lib_tracks;
     int lib_count;
     int lib_current;   // currently playing track (highlight)
-    int lib_cursor;    // user-moved cursor (NEXT/PREV in Library)
+
+    // Böngésző adatai (Library képernyő, player.c birtokolja)
+    const dir_entry_t *br_entries;
+    int br_count;
+    int br_cursor;
 } ui_t;
 
 static ui_t U;
@@ -85,8 +91,8 @@ static void build_settings(void);
 static void apply_screen_bg(lv_obj_t *scr);
 static lv_obj_t *make_panel(lv_obj_t *parent);
 static void update_screen_chip(void);
-static void library_rebuild_list(void);
-static void library_apply_styles(void);
+static void browser_rebuild_list(void);
+static void browser_apply_cursor(void);
 static void update_mini_playlist(void);
 static void settings_refresh_heap(void);
 
@@ -145,7 +151,7 @@ void ui_init(void)
     // ---- UI build ----
     lvgl_port_lock(0);
     memset(&U, 0, sizeof(U));
-    U.lib_cursor = 0;
+    U.br_cursor = 0;
     U.lib_current = -1;
 
     for (int i = 0; i < UI_SCREEN_COUNT; i++) {
@@ -173,6 +179,9 @@ static void apply_screen_bg(lv_obj_t *scr)
     lv_obj_set_style_bg_opa(scr, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_text_color(scr, COL_TEXT, LV_PART_MAIN);
     lv_obj_set_style_pad_all(scr, 0, LV_PART_MAIN);
+    // Default font az egész screen-en — minden label örökli, kivéve ahol
+    // explicit font van beállítva (title 18, subtitle 14).
+    lv_obj_set_style_text_font(scr, &mp3_inter_12, LV_PART_MAIN);
 }
 
 static lv_obj_t *make_panel(lv_obj_t *parent)
@@ -241,7 +250,7 @@ static void build_now_playing(void)
     lv_label_set_long_mode(U.np_lbl_title, LV_LABEL_LONG_DOT);
     lv_obj_set_width(U.np_lbl_title, 172);
     lv_obj_align(U.np_lbl_title, LV_ALIGN_TOP_LEFT, 140, 30);
-    lv_obj_set_style_text_font(U.np_lbl_title, &lv_font_montserrat_18, 0);
+    lv_obj_set_style_text_font(U.np_lbl_title, &mp3_inter_18, 0);
     lv_obj_set_style_text_color(U.np_lbl_title, COL_TEXT, 0);
     lv_label_set_text(U.np_lbl_title, "—");
 
@@ -249,7 +258,7 @@ static void build_now_playing(void)
     lv_label_set_long_mode(U.np_lbl_subtitle, LV_LABEL_LONG_DOT);
     lv_obj_set_width(U.np_lbl_subtitle, 172);
     lv_obj_align(U.np_lbl_subtitle, LV_ALIGN_TOP_LEFT, 140, 54);
-    lv_obj_set_style_text_font(U.np_lbl_subtitle, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(U.np_lbl_subtitle, &mp3_inter_14, 0);
     lv_obj_set_style_text_color(U.np_lbl_subtitle, COL_TEXT_DIM, 0);
     lv_label_set_text(U.np_lbl_subtitle, "");
 
@@ -294,9 +303,17 @@ static void build_library(void)
 {
     lv_obj_t *scr = U.scr[UI_SCREEN_LIBRARY];
 
+    // Aktuális könyvtár fejléc (a "LIB" chip alatt)
+    U.lib_path = lv_label_create(scr);
+    lv_label_set_long_mode(U.lib_path, LV_LABEL_LONG_DOT);
+    lv_obj_set_width(U.lib_path, 304);
+    lv_obj_align(U.lib_path, LV_ALIGN_TOP_LEFT, 8, 28);
+    lv_obj_set_style_text_color(U.lib_path, COL_TEXT_DIM, LV_PART_MAIN);
+    lv_label_set_text(U.lib_path, "/");
+
     U.lib_list = lv_list_create(scr);
-    lv_obj_set_size(U.lib_list, 304, 200);
-    lv_obj_align(U.lib_list, LV_ALIGN_TOP_LEFT, 8, 30);
+    lv_obj_set_size(U.lib_list, 304, 184);
+    lv_obj_align(U.lib_list, LV_ALIGN_TOP_LEFT, 8, 48);
     lv_obj_set_style_bg_color(U.lib_list, COL_BG_PANEL, LV_PART_MAIN);
     lv_obj_set_style_border_width(U.lib_list, 0, LV_PART_MAIN);
     lv_obj_set_style_radius(U.lib_list, 8, LV_PART_MAIN);
@@ -355,59 +372,59 @@ static void build_settings(void)
 // -----------------------------------------------------------------------------
 // Library helpers
 // -----------------------------------------------------------------------------
-static void library_apply_styles(void)
+// Egy list-gomb szöveg-label gyermekének megkeresése.
+static lv_obj_t *list_btn_label(lv_obj_t *btn)
+{
+    uint32_t n = lv_obj_get_child_count(btn);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t *c = lv_obj_get_child(btn, i);
+        if (lv_obj_check_type(c, &lv_label_class)) return c;
+    }
+    return NULL;
+}
+
+static void browser_apply_cursor(void)
 {
     if (!U.lib_list) return;
     uint32_t n = lv_obj_get_child_count(U.lib_list);
     for (uint32_t i = 0; i < n; i++) {
         lv_obj_t *btn = lv_obj_get_child(U.lib_list, i);
-        bool is_cursor  = ((int)i == U.lib_cursor);
-        bool is_playing = ((int)i == U.lib_current);
-        // A border tisztítása minden ágban — különben egy korábban
-        // currently-playing sor megtartaná a bal stripe-ot a kurzor alatt is.
-        lv_obj_set_style_border_width(btn, 0, LV_PART_MAIN);
-
+        bool is_cursor = ((int)i == U.br_cursor);
+        lv_obj_t *lbl = list_btn_label(btn);
         if (is_cursor) {
             lv_obj_set_style_bg_color(btn, COL_ACCENT, LV_PART_MAIN);
             lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
             lv_obj_set_style_text_color(btn, lv_color_hex(0x06141A), LV_PART_MAIN);
-        } else if (is_playing) {
-            // Lásd a mini playlistnél: accent stripe biztosítja a non-text
-            // kontrasztot, a háttér csak finom hangsúly.
-            lv_obj_set_style_bg_color(btn, COL_BG_PANEL_2, LV_PART_MAIN);
-            lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
-            lv_obj_set_style_text_color(btn, COL_ACCENT, LV_PART_MAIN);
-            lv_obj_set_style_border_color(btn, COL_ACCENT, LV_PART_MAIN);
-            lv_obj_set_style_border_width(btn, 3, LV_PART_MAIN);
-            lv_obj_set_style_border_side(btn, LV_BORDER_SIDE_LEFT, LV_PART_MAIN);
+            // Csak a kijelölt sor neve gördül, ha hosszú.
+            if (lbl) lv_label_set_long_mode(lbl, LV_LABEL_LONG_SCROLL_CIRCULAR);
         } else {
             lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, LV_PART_MAIN);
             lv_obj_set_style_text_color(btn, COL_TEXT, LV_PART_MAIN);
+            // A többi "..."-tal levágva, nem gördül.
+            if (lbl) lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
         }
     }
-    if (U.lib_cursor >= 0 && (uint32_t)U.lib_cursor < n) {
-        lv_obj_t *target = lv_obj_get_child(U.lib_list, U.lib_cursor);
-        lv_obj_scroll_to_view(target, LV_ANIM_ON);
+    if (U.br_cursor >= 0 && (uint32_t)U.br_cursor < n) {
+        lv_obj_scroll_to_view(lv_obj_get_child(U.lib_list, U.br_cursor), LV_ANIM_ON);
     }
 }
 
-static void library_rebuild_list(void)
+static void browser_rebuild_list(void)
 {
     if (!U.lib_list) return;
     lv_obj_clean(U.lib_list);
-    if (!U.lib_tracks || U.lib_count == 0) {
-        lv_obj_t *empty = lv_list_add_text(U.lib_list, "(no tracks)");
+    if (!U.br_entries || U.br_count == 0) {
+        lv_obj_t *empty = lv_list_add_text(U.lib_list, "(empty)");
         lv_obj_set_style_text_color(empty, COL_TEXT_DIM, 0);
         return;
     }
-    for (int i = 0; i < U.lib_count; i++) {
-        lv_obj_t *btn = lv_list_add_button(U.lib_list, LV_SYMBOL_AUDIO,
-                                           U.lib_tracks[i].name);
-        // Library cursort gomb-eseménnyel nem mozgatjuk (fizikai gombokkal megy),
-        // így a click eseménnyel nem foglalkozunk. A scroll továbbra is működik.
+    for (int i = 0; i < U.br_count; i++) {
+        // Mappa = folder ikon, fájl = audio ikon
+        const char *icon = U.br_entries[i].is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_AUDIO;
+        lv_obj_t *btn = lv_list_add_button(U.lib_list, icon, U.br_entries[i].name);
         (void)btn;
     }
-    library_apply_styles();
+    browser_apply_cursor();
 }
 
 static void update_mini_playlist(void)
@@ -480,23 +497,33 @@ ui_screen_t ui_current_screen(void)
     return U.current;
 }
 
-void ui_library_move_cursor(int delta)
+void ui_browser_show(const char *path, const dir_entry_t *entries,
+                     int count, int cursor)
 {
     lvgl_port_lock(0);
-    if (U.lib_count > 0) {
-        int c = U.lib_cursor + delta;
-        // Wrap-around
-        while (c < 0)              c += U.lib_count;
-        while (c >= U.lib_count)   c -= U.lib_count;
-        U.lib_cursor = c;
-        library_apply_styles();
+    U.br_entries = entries;
+    U.br_count   = count;
+    U.br_cursor  = cursor;
+    if (U.lib_path) {
+        // A /sdcard prefixet elhagyjuk, hogy rövidebb legyen; gyökérnél "/"
+        const char *disp = path;
+        size_t mlen = strlen(SD_MOUNT_POINT);
+        if (strncmp(path, SD_MOUNT_POINT, mlen) == 0) {
+            disp = path + mlen;
+            if (disp[0] == 0) disp = "/";
+        }
+        lv_label_set_text(U.lib_path, disp);
     }
+    browser_rebuild_list();
     lvgl_port_unlock();
 }
 
-int ui_library_get_selected_index(void)
+void ui_browser_set_cursor(int cursor)
 {
-    return U.lib_cursor;
+    lvgl_port_lock(0);
+    U.br_cursor = cursor;
+    browser_apply_cursor();
+    lvgl_port_unlock();
 }
 
 void ui_set_track_count(int count)
@@ -539,8 +566,8 @@ void ui_show_track(const track_t *tr)
 void ui_show_no_track(void)
 {
     lvgl_port_lock(0);
-    if (U.np_lbl_title)    lv_label_set_text(U.np_lbl_title, "(no tracks on SD)");
-    if (U.np_lbl_subtitle) lv_label_set_text(U.np_lbl_subtitle, "");
+    if (U.np_lbl_title)    lv_label_set_text(U.np_lbl_title, "...");
+    if (U.np_lbl_subtitle) lv_label_set_text(U.np_lbl_subtitle, "Válassz a Library-ből");
     if (U.np_img_cover)    lv_obj_add_flag(U.np_img_cover, LV_OBJ_FLAG_HIDDEN);
     lvgl_port_unlock();
 }
@@ -610,23 +637,13 @@ void ui_set_battery(uint16_t mv, uint8_t percent)
 
 void ui_set_playlist(const track_t *tracks, int count, int current_idx)
 {
+    // Ez most CSAK a Now Playing mini-listát (épp játszott album) frissíti.
+    // A Library képernyő külön böngésző (ui_browser_show).
     lvgl_port_lock(0);
-    bool list_changed = (U.lib_tracks != tracks) || (U.lib_count != count);
     U.lib_tracks  = tracks;
     U.lib_count   = count;
     U.lib_current = current_idx;
-    if (count > 0) {
-        if (U.lib_cursor < 0 || U.lib_cursor >= count) U.lib_cursor = current_idx;
-    } else {
-        U.lib_cursor = 0;
-    }
-
-    if (list_changed) library_rebuild_list();
-    else              library_apply_styles();
-
     update_mini_playlist();
-
-    if (U.set_val_tracks) lv_label_set_text_fmt(U.set_val_tracks, "%d", count);
     lvgl_port_unlock();
 }
 
