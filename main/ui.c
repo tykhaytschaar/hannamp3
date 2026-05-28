@@ -280,7 +280,7 @@ static void build_now_playing(void)
     U.np_lbl_state = lv_label_create(scr);
     lv_obj_align(U.np_lbl_state, LV_ALIGN_TOP_LEFT, 140, 124);
     lv_obj_set_style_text_color(U.np_lbl_state, COL_ACCENT, 0);
-    lv_label_set_text(U.np_lbl_state, LV_SYMBOL_PAUSE);
+    lv_label_set_text(U.np_lbl_state, LV_SYMBOL_STOP);   // boot-kor idle
 
     U.np_lbl_volume = lv_label_create(scr);
     lv_obj_align(U.np_lbl_volume, LV_ALIGN_TOP_LEFT, 168, 124);
@@ -572,11 +572,17 @@ void ui_show_no_track(void)
     lvgl_port_unlock();
 }
 
-void ui_set_playing(bool playing)
+void ui_set_state(audio_state_t st)
 {
     lvgl_port_lock(0);
     if (U.np_lbl_state) {
-        lv_label_set_text(U.np_lbl_state, playing ? LV_SYMBOL_PLAY : LV_SYMBOL_PAUSE);
+        const char *sym;
+        switch (st) {
+            case AUDIO_STATE_PLAYING: sym = LV_SYMBOL_PLAY;  break;
+            case AUDIO_STATE_PAUSED:  sym = LV_SYMBOL_PAUSE; break;
+            default:                  sym = LV_SYMBOL_STOP;  break;  // STOPPED, FINISHED
+        }
+        lv_label_set_text(U.np_lbl_state, sym);
     }
     lvgl_port_unlock();
 }

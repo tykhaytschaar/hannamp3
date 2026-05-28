@@ -46,7 +46,7 @@ static void cli_dispatch(const char *cmd, const char *param)
     } else if (strcmp(cmd, "stop") == 0) {
         ESP_LOGI(TAG, "stop");
         audio_stop();
-        ui_set_playing(false);
+        ui_set_state(AUDIO_STATE_STOPPED);
         ui_set_progress(0, 0);
     } else if (strcmp(cmd, "next") == 0) {
         ESP_LOGI(TAG, "next");

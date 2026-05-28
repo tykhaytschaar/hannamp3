@@ -8,7 +8,7 @@
 #   0x150-0x151   Ő ő
 #   0x170-0x171   Ű ű
 #   FontAwesome:  AUDIO, REFRESH, MUTE, VOL_MID, VOL_MAX, PREV, PLAY, PAUSE,
-#                 NEXT, DIRECTORY, BATTERY_FULL..EMPTY  (lásd lv_symbol_def.h)
+#                 STOP, NEXT, DIRECTORY, BATTERY_FULL..EMPTY  (lásd lv_symbol_def.h)
 #
 # Előfeltételek (egyszer):
 #   npm install -g lv_font_conv
@@ -42,7 +42,7 @@ for src, dst in [
 PY
 
 echo "[3/3] LVGL font generálás (bpp=4)…"
-SYMBOLS="0xF001,0xF021,0xF026-0xF028,0xF048,0xF04B-0xF04C,0xF051,0xF07B,0xF240-0xF244"
+SYMBOLS="0xF001,0xF021,0xF026-0xF028,0xF048,0xF04B-0xF04D,0xF051,0xF07B,0xF240-0xF244"
 LATIN_BASIC="0x20-0x7E,0xA0-0xFF"
 LATIN_EXT="0x0150-0x0151,0x0170-0x0171"
 

@@ -12,7 +12,9 @@ void ui_init(void);
 void ui_show_track(const track_t *tr);   // cím + álbumkép töltés
 void ui_show_no_track(void);
 
-void ui_set_playing(bool playing);
+// A Now Playing állapot-ikont állítja: PLAYING → ▶, PAUSED → ⏸, STOPPED/FINISHED → ■
+#include "audio.h"
+void ui_set_state(audio_state_t st);
 void ui_set_progress(uint32_t pos_ms, uint32_t dur_ms);
 void ui_set_volume(uint8_t vol);
 void ui_set_battery(uint16_t mv, uint8_t percent);

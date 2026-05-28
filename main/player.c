@@ -105,10 +105,10 @@ static void select_current(bool autoplay)
     ui_set_playlist(s_tracks, s_count, s_idx);
     persist_set_str("last_file", s_tracks[s_idx].path);   // utoljára nyitott fájl
     if (autoplay) {
-        ui_set_playing(true);
+        ui_set_state(AUDIO_STATE_PLAYING);
         audio_play(s_tracks[s_idx].path);
     } else {
-        ui_set_playing(false);
+        ui_set_state(AUDIO_STATE_STOPPED);
     }
 }
 
@@ -152,10 +152,10 @@ void player_handle_button(btn_event_t evt)
             browser_activate();
         } else if (st.state == AUDIO_STATE_PLAYING) {
             audio_pause();
-            ui_set_playing(false);
+            ui_set_state(AUDIO_STATE_PAUSED);
         } else if (st.state == AUDIO_STATE_PAUSED) {
             audio_resume();
-            ui_set_playing(true);
+            ui_set_state(AUDIO_STATE_PLAYING);
         } else {
             play_current();
         }
@@ -307,7 +307,7 @@ void player_start(void)
     // Ha nincs mit visszaállítani (nincs SD / törölt fájl), üres Now Playing.
     if (!restored) {
         ui_show_no_track();
-        ui_set_playing(false);
+        ui_set_state(AUDIO_STATE_STOPPED);
     }
 
     xTaskCreate(player_task, "player", 4096, NULL, 4, NULL);
