@@ -59,5 +59,21 @@ void ui_browser_show(const char *path, const dir_entry_t *entries,
                      int count, int cursor);
 void ui_browser_set_cursor(int cursor);
 
+// -----------------------------------------------------------------------------
+// Idle / energy management
+// -----------------------------------------------------------------------------
+// 30 másodperc inaktivitás után a panel kikapcsol (DISPOFF). Bármilyen
+// felhasználói trigger (gomb / CLI) visszakapcsolja és nullázza az idő-számlálót.
+//
+// ui_user_activity():  hívd minden user-eseménynél (gomb / cli dispatch).
+//                      Visszakapcsolja a panelt ha aludt, és nullázza az idő-t.
+//                      Visszatérési érték: true, ha ezzel a hívással felébredt
+//                      a kijelző (eddig DISPOFF volt). Gomboknál ekkor érdemes
+//                      "csak ébresztés, esemény nem fut" viselkedést alkalmazni.
+// ui_idle_check():     periodikusan hívd (pl. player_task-ból, 200 ms-enként).
+//                      30 s tétlenség után DISPOFF-ot küld a panelra.
+bool ui_user_activity(void);
+void ui_idle_check(void);
+
 // Tájékoztató panel a Settings képernyőn — a player.c rescan után frissíti.
 void ui_set_track_count(int count);

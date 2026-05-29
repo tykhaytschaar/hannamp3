@@ -5,6 +5,7 @@
 #include "freertos/task.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
@@ -35,6 +36,12 @@ static const char *TAG = "ui";
 // Module state
 // -----------------------------------------------------------------------------
 static lv_display_t *s_disp = NULL;
+
+// Idle / energy management — 30 s után a panel DISPOFF, user-eseményre vissza.
+#define UI_IDLE_TIMEOUT_MS  30000
+static esp_lcd_panel_handle_t s_panel = NULL;
+static int64_t                s_last_activity_us = 0;
+static bool                   s_disp_off = false;
 
 typedef struct {
     // Screens
@@ -128,6 +135,8 @@ void ui_init(void)
     esp_lcd_panel_init(panel);
     esp_lcd_panel_invert_color(panel, true);
     esp_lcd_panel_disp_on_off(panel, true);
+    s_panel = panel;                                  // idle/wake-hez
+    s_last_activity_us = esp_timer_get_time();
 
     // ---- LVGL port ----
     lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
@@ -585,6 +594,31 @@ void ui_set_state(audio_state_t st)
         lv_label_set_text(U.np_lbl_state, sym);
     }
     lvgl_port_unlock();
+}
+
+bool ui_user_activity(void)
+{
+    s_last_activity_us = esp_timer_get_time();
+    if (s_disp_off && s_panel) {
+        lvgl_port_lock(0);
+        esp_lcd_panel_disp_on_off(s_panel, true);
+        s_disp_off = false;
+        lvgl_port_unlock();
+        return true;     // ezzel a hívással ébresztettünk
+    }
+    return false;
+}
+
+void ui_idle_check(void)
+{
+    if (s_disp_off || !s_panel) return;
+    int64_t elapsed_ms = (esp_timer_get_time() - s_last_activity_us) / 1000;
+    if (elapsed_ms >= UI_IDLE_TIMEOUT_MS) {
+        lvgl_port_lock(0);
+        esp_lcd_panel_disp_on_off(s_panel, false);
+        s_disp_off = true;
+        lvgl_port_unlock();
+    }
 }
 
 static void fmt_mmss(uint32_t ms, char *buf, int n)

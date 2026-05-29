@@ -140,6 +140,11 @@ static void browser_activate(void)
 
 void player_handle_button(btn_event_t evt)
 {
+    // Ha sötét volt a kijelző, ez a gombnyomás CSAK ébresztés — a tényleges
+    // funkciót (play/next/menu/stb.) nem hajtjuk végre. A felhasználónak még
+    // egy gombnyomás kell, hogy érvényesüljön.
+    if (ui_user_activity()) return;
+
     audio_status_t st;
     audio_get_status(&st);
 
@@ -243,6 +248,7 @@ static void player_task(void *arg)
             }
         }
         last_state = st.state;
+        ui_idle_check();   // 30 s tétlenség → DISPOFF
         vTaskDelay(pdMS_TO_TICKS(200));
     }
 }

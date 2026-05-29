@@ -32,6 +32,20 @@ static void pre_init_cs_pins(void)
     gpio_set_level(PIN_SD_CS, 1);
 }
 
+// GPIO 40 fixen LOW szintre (külső HW követelmény).
+static void init_static_low_pins(void)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL << GPIO_NUM_40,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&cfg);
+    gpio_set_level(GPIO_NUM_40, 0);
+}
+
 
 static const char *TAG = "main";
 
@@ -48,6 +62,7 @@ void app_main(void)
     // CS-eket még a SPI inicializálás előtt HIGH-ra — különben a köztes
     // pillanatban a TFT chip lebegő CS-szel SD adatokat venne fel.
     pre_init_cs_pins();
+    init_static_low_pins();
 
     // Sorrend fontos: SD a SPI buszt is inicializálja, amit az UI újrahasznosít.
     sd_init();

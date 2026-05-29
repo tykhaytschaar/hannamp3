@@ -44,7 +44,7 @@
 // Fekvő tájolás (90° CCW)
 #define LCD_H_RES           320
 #define LCD_V_RES           240
-#define LCD_SPI_HZ          (1 * 1000 * 1000)
+#define LCD_SPI_HZ          (4 * 1000 * 1000)
 
 // -----------------------------------------------------------------------------
 // SD mount + zenék
