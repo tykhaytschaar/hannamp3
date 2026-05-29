@@ -11,6 +11,10 @@ idf_component_register(
         "fonts/mp3_inter_14.c"
         "fonts/mp3_inter_18.c"
     INCLUDE_DIRS "." "fonts"
+    PRIV_INCLUDE_DIRS
+        # Helix MP3 internal headers (FrameHeader / SideInfo / IMDCTInfo / ...
+        # méretek a track-váltáskori in-place dekóder reset-hez).
+        "../managed_components/chmorgan__esp-libhelix-mp3/libhelix-mp3/real"
     REQUIRES
         driver
         esp_lcd

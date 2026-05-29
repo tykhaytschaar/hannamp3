@@ -10,7 +10,9 @@
 #include "esp_heap_caps.h"
 #include "driver/i2s_std.h"
 
-#include "mp3dec.h"   // libhelix-mp3
+#include "mp3dec.h"      // libhelix-mp3 publikus API
+#include "mp3common.h"   // MP3DecInfo struktúra (sub-struct pointerek + mainBuf)
+#include "coder.h"       // FrameHeader / SideInfo / IMDCTInfo / SubbandInfo sizeof-ok
 
 #include "app_config.h"
 #include "audio.h"
@@ -51,6 +53,63 @@ static void i2s_set_enabled(bool en)
         i2s_channel_disable(s_tx_chan);
         s_i2s_enabled = false;
     }
+}
+
+// Helix MP3 dekóder állapot reset alloc/free nélkül.
+// MP3InitDecoder az AllocateBuffers-ben memset-eli a MP3DecInfo-t ÉS minden
+// sub-struktúrát — mi pontosan ugyanezt csináljuk, csak a meglévő bufferek
+// pointereit megőrizve, hogy ne fragmentáljuk a heap-et 8 db malloc/free-vel.
+//
+// Miért kell: a Helix dekóder belső állapotot (IMDCT overlap-add delay line,
+// polyphase subband filterbank delay, mainBuf bit reservoir) tart fenn track-
+// ek között. Új trackre váltáskor az első ~1 frame audiója az ELŐZŐ track
+// állapotát is "magával hozza" — pont ez a "kicsi ismétlés a régi végéből".
+static void mp3_reset_state(HMP3Decoder hMP3)
+{
+    if (!hMP3) return;
+    MP3DecInfo *d = (MP3DecInfo *)hMP3;
+
+    // Sub-struct pointereket lementjük; a MP3DecInfo memset után visszaírjuk.
+    void *fh  = d->FrameHeaderPS;
+    void *si  = d->SideInfoPS;
+    void *sfi = d->ScaleFactorInfoPS;
+    void *hi  = d->HuffmanInfoPS;
+    void *di  = d->DequantInfoPS;
+    void *mi  = d->IMDCTInfoPS;
+    void *sbi = d->SubbandInfoPS;
+
+    memset(d, 0, sizeof(MP3DecInfo));   // mainBuf + összes scalar állapot
+
+    d->FrameHeaderPS     = fh;
+    d->SideInfoPS        = si;
+    d->ScaleFactorInfoPS = sfi;
+    d->HuffmanInfoPS     = hi;
+    d->DequantInfoPS     = di;
+    d->IMDCTInfoPS       = mi;
+    d->SubbandInfoPS     = sbi;
+
+    // Sub-structok tartalmát kinullázzuk — IMDCT/Subband delay line itt él.
+    memset(fh,  0, sizeof(FrameHeader));
+    memset(si,  0, sizeof(SideInfo));
+    memset(sfi, 0, sizeof(ScaleFactorInfo));
+    memset(hi,  0, sizeof(HuffmanInfo));
+    memset(di,  0, sizeof(DequantInfo));
+    memset(mi,  0, sizeof(IMDCTInfo));
+    memset(sbi, 0, sizeof(SubbandInfo));
+}
+
+// Track-váltáskor: teljes I2S csatorna teardown.
+// Csak így garantálható, hogy a DMA descriptor-ok régi PCM tartalma eltűnjön.
+// (i2s_channel_preload_data NEM nullázza ki az összes descriptort: a belső
+// curr_ptr/rw_pos állapotból folytatja, és a wrap-around előtt megáll, így
+// a már beírt régi descriptorok érintetlenek maradnak.)
+static void i2s_destroy(void)
+{
+    if (!s_tx_chan) return;
+    i2s_set_enabled(false);
+    i2s_del_channel(s_tx_chan);
+    s_tx_chan = NULL;
+    s_cur_sample_rate = 0;
 }
 
 // Quadratic (vol^2) taper: az emberi fül logaritmikusan érzékel, a négyzetes
@@ -104,6 +163,7 @@ static esp_err_t setup_i2s(uint32_t sample_rate)
         },
     };
     ESP_ERROR_CHECK(i2s_channel_init_std_mode(s_tx_chan, &std));
+
     i2s_channel_enable(s_tx_chan);
     s_i2s_enabled = true;
     s_cur_sample_rate = sample_rate;
@@ -153,6 +213,14 @@ static void audio_task(void *arg)
         if (xQueueReceive(s_cmd_q, &msg, wait) == pdTRUE) {
             switch (msg.cmd) {
             case CMD_PLAY:
+                // Track-váltás kétlépcsős takarítás:
+                //  1) Helix dekóder belső állapot (IMDCT/Subband delay line,
+                //     bit reservoir) → mp3_reset_state, különben az új track
+                //     első frame-je még a régiből származó mintákkal kevert.
+                //  2) I2S csatorna → i2s_destroy, hogy a DMA descriptorokban
+                //     ne maradjon régi PCM (a preload nem nullázza ki mindet).
+                mp3_reset_state(hMP3);
+                i2s_destroy();
                 ui_spi_lock();
                 if (fp) { fclose(fp); fp = NULL; }
                 fp = fopen(msg.path, "rb");
@@ -186,7 +254,7 @@ static void audio_task(void *arg)
                 in_bytes = 0;
                 in_ptr   = inbuf;
                 total_samples = 0;
-                i2s_set_enabled(true);
+                // I2S enable nem itt — setup_i2s() építi újra az első frame után.
                 playing = true;
                 status_set(AUDIO_STATE_PLAYING);
                 ESP_LOGI(TAG, "Play %s (%lu B)", msg.path, (unsigned long)file_size);

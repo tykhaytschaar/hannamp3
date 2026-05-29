@@ -84,52 +84,68 @@ static void cli_dispatch(const char *cmd, const char *param)
     }
 }
 
-// Parser: #command$param#  — a $param opcionális (#command# is OK).
-typedef enum { ST_IDLE, ST_CMD, ST_PARAM } pstate_t;
+// Parser: ##cmd$$payload##  (vagy ##cmd## payload nélkül).
+// A duplázott delimiterek miatt egy egyszerű állapotgép kell.
+typedef enum {
+    ST_IDLE,            // várjuk az első #-et
+    ST_HASH1,           // egy # megvolt, a másikat várjuk
+    ST_CMD,             // cmd gyűjtése
+    ST_CMD_HASH,        // cmd-ben egy # — második #-re zárul a frame (payload nélkül)
+    ST_CMD_DOLLAR,      // cmd-ben egy $ — második $-re indul a payload
+    ST_PAYLOAD,         // payload gyűjtése
+    ST_PAYLOAD_HASH,    // payload-ban egy # — második #-re zárul a frame
+} pstate_t;
 
 static void cli_task(void *arg)
 {
     uint8_t rx[64];
-    char cmd[CLI_CMD_MAX];     int cmd_len = 0;
-    char param[CLI_PARAM_MAX]; int param_len = 0;
+    char cmd[CLI_CMD_MAX];      int cmd_len = 0;
+    char payload[CLI_PARAM_MAX]; int payload_len = 0;
     pstate_t state = ST_IDLE;
 
-    ESP_LOGI(TAG, "CLI ready — formátum: #parancs$param#  (pl. #play#, #vol$up#, #vol$50#)");
+    ESP_LOGI(TAG, "CLI ready — formátum: ##cmd##  vagy  ##cmd$$payload##");
 
     while (1) {
         int n = uart_read_bytes(CLI_UART, rx, sizeof(rx), pdMS_TO_TICKS(100));
         for (int i = 0; i < n; i++) {
             char c = (char)rx[i];
             switch (state) {
-                case ST_IDLE:
-                    if (c == '#') { state = ST_CMD; cmd_len = 0; param_len = 0; }
-                    break;
-                case ST_CMD:
-                    if (c == '$') {
-                        cmd[cmd_len] = 0;
-                        state = ST_PARAM;
-                    } else if (c == '#') {
-                        cmd[cmd_len] = 0;
-                        param[0] = 0;
-                        cli_dispatch(cmd, param);
-                        state = ST_IDLE;
-                    } else if (cmd_len < CLI_CMD_MAX - 1) {
-                        cmd[cmd_len++] = c;
-                    } else {
-                        state = ST_IDLE;   // overflow
-                    }
-                    break;
-                case ST_PARAM:
-                    if (c == '#') {
-                        param[param_len] = 0;
-                        cli_dispatch(cmd, param);
-                        state = ST_IDLE;
-                    } else if (param_len < CLI_PARAM_MAX - 1) {
-                        param[param_len++] = c;
-                    } else {
-                        state = ST_IDLE;   // overflow
-                    }
-                    break;
+            case ST_IDLE:
+                if (c == '#') state = ST_HASH1;
+                break;
+            case ST_HASH1:
+                if (c == '#') { state = ST_CMD; cmd_len = 0; payload_len = 0; }
+                else          { state = ST_IDLE; }   // egyetlen # → false alarm
+                break;
+            case ST_CMD:
+                if      (c == '#') state = ST_CMD_HASH;
+                else if (c == '$') state = ST_CMD_DOLLAR;
+                else if (cmd_len < CLI_CMD_MAX - 1) cmd[cmd_len++] = c;
+                else               state = ST_IDLE;   // overflow
+                break;
+            case ST_CMD_HASH:
+                if (c == '#') {
+                    cmd[cmd_len] = 0; payload[0] = 0;
+                    cli_dispatch(cmd, payload);
+                }
+                state = ST_IDLE;
+                break;
+            case ST_CMD_DOLLAR:
+                if (c == '$') state = ST_PAYLOAD;
+                else          state = ST_IDLE;   // árva $ → false alarm, reset
+                break;
+            case ST_PAYLOAD:
+                if      (c == '#') state = ST_PAYLOAD_HASH;
+                else if (payload_len < CLI_PARAM_MAX - 1) payload[payload_len++] = c;
+                else               state = ST_IDLE;
+                break;
+            case ST_PAYLOAD_HASH:
+                if (c == '#') {
+                    cmd[cmd_len] = 0; payload[payload_len] = 0;
+                    cli_dispatch(cmd, payload);
+                }
+                state = ST_IDLE;
+                break;
             }
         }
     }

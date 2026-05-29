@@ -14,6 +14,7 @@
 #include "ui.h"
 #include "io.h"
 #include "player.h"
+#include "esp_timer.h"
 
 static const char *TAG = "player";
 
@@ -106,6 +107,8 @@ static void select_current(bool autoplay)
     persist_set_str("last_file", s_tracks[s_idx].path);   // utoljára nyitott fájl
     if (autoplay) {
         ui_set_state(AUDIO_STATE_PLAYING);
+        // Az audio task CMD_PLAY indulásakor letiltja az I2S-t (lásd audio.c) —
+        // ezzel instant csend lesz az átmenet alatt, mute hack nem kell.
         audio_play(s_tracks[s_idx].path);
     } else {
         ui_set_state(AUDIO_STATE_STOPPED);
