@@ -50,10 +50,13 @@ Az SPI órajel 10 MHz (mind a TFT, mind az SD oldalán) — a közös buszon óv
 | LCK | GPIO 6 | I2S word select (LRCK) |
 | DIN | GPIO 7 | I2S data |
 | SCK | **GND** | Master clock-ot a modul belső PLL-ből csinálja |
+| **XSMT** | **GPIO 21** | Soft-mute. Track-váltáskor LOW (mute fade-out), különben HIGH (unmute). A klikkmentes track-átmenethez |
 
-Modul jumperei (alapból általában jól vannak):
-- XSMT → HIGH (3V3) — különben néma
+Modul jumperei:
 - FLT, DEMP, FMT → LOW (GND)
+- XSMT → most GPIO 21-ről hajtott. Ha a modulodon hardveresen 3V3-ra van
+  kötve (pull-up vagy jumper), azt a hidat el kell távolítani, hogy a GPIO
+  tudja LOW-ra húzni
 
 ## Akku-mérés (18650-hez)
 

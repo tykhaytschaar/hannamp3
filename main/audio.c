@@ -9,6 +9,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "driver/i2s_std.h"
+#include "driver/gpio.h"
 
 #include "mp3dec.h"      // libhelix-mp3 publikus API
 #include "mp3common.h"   // MP3DecInfo struktúra (sub-struct pointerek + mainBuf)
@@ -40,6 +41,23 @@ static audio_status_t   s_status = { .volume = 70 };
 static i2s_chan_handle_t s_tx_chan = NULL;
 static uint32_t          s_cur_sample_rate = 0;
 static bool              s_i2s_enabled = false;
+// CMD_PLAY mute-olja a DAC-ot (XSMT=LOW). Az unmute (XSMT=HIGH) az első
+// sikeres i2s_channel_write után történik, hogy a DAC már stabil mintákat
+// kapjon a fade-in alatt.
+static volatile bool     s_pending_unmute = false;
+
+// Szoftveres fade-in: a CMD_PLAY után az első N sample-en lineáris
+// 0 → 1 gain rámpa. Ezzel az XSMT unmute pillanata (~2.4 ms DAC belső
+// rámpa) sosem esik nagy amplitúdójú audiora — a digitális szint pont
+// 0 közelében van, így a két rámpa simán összesimul.
+//   100 ms @ 44.1k = 4410 sample / csatorna. Más sample rate-en kicsit
+//   más időhossz, de a nagyságrend marad.
+static int s_fade_in_remaining = 0;
+static int s_fade_in_total     = 0;
+#define FADE_IN_SAMPLES_PER_CHAN  (100 * 44100 / 1000)
+
+static inline void xsmt_mute(void)   { gpio_set_level(PIN_XSMT, 0); }
+static inline void xsmt_unmute(void) { gpio_set_level(PIN_XSMT, 1); }
 
 // Az I2S csatorna ki/be kapcsolása. Pause/stop-nál letiltjuk, hogy a DMA
 // ne ismételje az utolsó mintát (kattogás), resume/play-nél visszakapcsoljuk.
@@ -132,7 +150,11 @@ static void apply_volume(int16_t *pcm, int samples, uint8_t vol)
 
 static esp_err_t setup_i2s(uint32_t sample_rate)
 {
-    if (s_tx_chan && s_cur_sample_rate == sample_rate) return ESP_OK;
+    if (s_tx_chan && s_cur_sample_rate == sample_rate) {
+        // STOP után a csatorna létezik és a rate stimmel, de DISABLED — re-enable.
+        i2s_set_enabled(true);
+        return ESP_OK;
+    }
 
     if (s_tx_chan) {
         i2s_set_enabled(false);
@@ -213,12 +235,14 @@ static void audio_task(void *arg)
         if (xQueueReceive(s_cmd_q, &msg, wait) == pdTRUE) {
             switch (msg.cmd) {
             case CMD_PLAY:
-                // Track-váltás kétlépcsős takarítás:
-                //  1) Helix dekóder belső állapot (IMDCT/Subband delay line,
-                //     bit reservoir) → mp3_reset_state, különben az új track
-                //     első frame-je még a régiből származó mintákkal kevert.
-                //  2) I2S csatorna → i2s_destroy, hogy a DMA descriptorokban
-                //     ne maradjon régi PCM (a preload nem nullázza ki mindet).
+                // Track-váltás takarítás:
+                //  0) DAC mute (XSMT=LOW), 5 ms várakozás a belső rámpára.
+                //  1) Helix dekóder state reset (IMDCT/Subband/reservoir).
+                //  2) I2S csatorna teardown — szükséges, mert csak így
+                //     tisztul ki a DMA descriptor-tartalom. (BCLK kis pop-ot
+                //     ad a recreate-nél, de ezt a 100 ms-os mute lefedi.)
+                xsmt_mute();
+                vTaskDelay(pdMS_TO_TICKS(5));
                 mp3_reset_state(hMP3);
                 i2s_destroy();
                 ui_spi_lock();
@@ -256,6 +280,9 @@ static void audio_task(void *arg)
                 total_samples = 0;
                 // I2S enable nem itt — setup_i2s() építi újra az első frame után.
                 playing = true;
+                s_pending_unmute = true;   // unmute az első új i2s_write után
+                s_fade_in_total = FADE_IN_SAMPLES_PER_CHAN;
+                s_fade_in_remaining = s_fade_in_total;
                 status_set(AUDIO_STATE_PLAYING);
                 ESP_LOGI(TAG, "Play %s (%lu B)", msg.path, (unsigned long)file_size);
                 break;
@@ -346,8 +373,34 @@ static void audio_task(void *arg)
         uint8_t vol = audio_get_volume();
         apply_volume(outbuf, samples, vol);
 
+        // Szoftveres fade-in az új track első ~50 ms-én. Lineáris gain rámpa
+        // 0 → 1 sample-szinten. Ezzel a XSMT unmute pillanat sosem esik
+        // nagy digitális amplitúdójú audiora, a "pukk" eltűnik.
+        if (s_fade_in_remaining > 0) {
+            int n_per_chan = samples / 2;   // outbuf L+R interleaved
+            for (int i = 0; i < n_per_chan && s_fade_in_remaining > 0; i++) {
+                int32_t gain_q15 = (int32_t)(s_fade_in_total - s_fade_in_remaining)
+                                   * 32768 / s_fade_in_total;
+                outbuf[2*i    ] = (int16_t)(((int32_t)outbuf[2*i    ] * gain_q15) >> 15);
+                outbuf[2*i + 1] = (int16_t)(((int32_t)outbuf[2*i + 1] * gain_q15) >> 15);
+                s_fade_in_remaining--;
+            }
+        }
+
         size_t bw = 0;
         i2s_channel_write(s_tx_chan, outbuf, samples * sizeof(int16_t), &bw, portMAX_DELAY);
+
+        // Az első új write után 100 ms várakozás unmute előtt:
+        //   - track-váltáskor ez alatt fut ki a régi DMA-tartalom a DAC-on
+        //     (8 descriptor × 11.6 ms ≈ 93 ms @ 44.1k, mind muted)
+        //   - a Helix filterbank felfutása (~26 ms) szintén lefedve
+        //   - az új audio fade-in-je (100 ms) felében jár, így az unmute
+        //     pillanata közepes, simán változó digitális amplitúdóra esik
+        if (s_pending_unmute) {
+            vTaskDelay(pdMS_TO_TICKS(100));
+            xsmt_unmute();
+            s_pending_unmute = false;
+        }
 
         // pozíció becslés
         total_samples += samples / 2;   // per channel
@@ -363,8 +416,25 @@ void audio_init(void)
     s_cmd_q = xQueueCreate(4, sizeof(audio_msg_t));
     s_status_mux = xSemaphoreCreateMutex();
 
+    // XSMT GPIO: bootkor LOW (mute), hogy a BCLK elindulása ne klikkeljen.
+    // Késleltetés után HIGH-ra állítjuk, amikor a DMA már stabil zerókat ad.
+    gpio_config_t xsmt_io = {
+        .pin_bit_mask = 1ULL << PIN_XSMT,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&xsmt_io);
+    xsmt_mute();
+
     // Indulásra default I2S 44.1k — első keret után úgyis újrahangoljuk.
     setup_i2s(44100);
+
+    // BCLK stabilizálódjon, majd unmute. A DMA bufferek zerók (calloc) →
+    // a DAC csendben indul.
+    vTaskDelay(pdMS_TO_TICKS(5));
+    xsmt_unmute();
 
     // Core 1, magas prio: glitch-mentes audio
     xTaskCreatePinnedToCore(audio_task, "audio", 8192, NULL, 10, NULL, 1);

@@ -8,6 +8,10 @@
 #define PIN_I2S_BCK         GPIO_NUM_5
 #define PIN_I2S_LRCK        GPIO_NUM_6
 #define PIN_I2S_DIN         GPIO_NUM_7
+// PCM5102 XSMT: HIGH = unmute, LOW = soft mute (~104 BCLK = ~2.4 ms ramp).
+// Track-váltáskor mute-oljuk, hogy a BCLK gating-ből származó analóg
+// klikkek ne hallatsszanak.
+#define PIN_XSMT            GPIO_NUM_21
 
 // -----------------------------------------------------------------------------
 // SPI2 — TFT (ST7789V) + SD közös busz
