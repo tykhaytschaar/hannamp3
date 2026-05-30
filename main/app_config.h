@@ -30,12 +30,18 @@
 // -----------------------------------------------------------------------------
 // Gombok (mind GND-re zárnak, belső pull-up)
 // -----------------------------------------------------------------------------
-#define PIN_BTN_PLAY        GPIO_NUM_1
+// MENU GPIO 1-en (RTC-capable), hogy deep sleep-ből EXT1 wake-forrás lehessen.
+// PLAY átkerült GPIO 41-re.
+#define PIN_BTN_MENU        GPIO_NUM_1
 #define PIN_BTN_NEXT        GPIO_NUM_2
 #define PIN_BTN_PREV        GPIO_NUM_42
-#define PIN_BTN_MENU        GPIO_NUM_41
+#define PIN_BTN_PLAY        GPIO_NUM_41
 #define PIN_BTN_VOL_UP      GPIO_NUM_38
 #define PIN_BTN_VOL_DOWN    GPIO_NUM_39
+
+// Lakat tolókapcsoló (slide switch) — egyik állása GND felé zár (LOW = lock).
+// Pull-up belül, polling 100 ms-onként debounce-szal.
+#define PIN_LOCK_SWITCH     GPIO_NUM_17
 
 // -----------------------------------------------------------------------------
 // Akku ADC: 100k:100k osztón át az 18650 (+) lábról
@@ -51,7 +57,7 @@
 // Fekvő tájolás (90° CCW)
 #define LCD_H_RES           320
 #define LCD_V_RES           240
-#define LCD_SPI_HZ          (4 * 1000 * 1000)
+#define LCD_SPI_HZ          (2 * 1000 * 1000)
 
 // -----------------------------------------------------------------------------
 // SD mount + zenék

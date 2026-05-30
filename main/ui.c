@@ -49,6 +49,10 @@ static bool                   s_disp_off = false;
 static int  s_set_cursor  = 0;     // melyik szerkeszthető elemen áll
 static bool s_set_editing = false; // épp módosítjuk-e
 
+// Sleep enable — a player_task használja a deep sleep döntéshez.
+// Default false: a felhasználó kapcsolja be a Settings-ből.
+static bool s_sleep_enabled = false;
+
 typedef struct {
     // Screens
     lv_obj_t *scr[UI_SCREEN_COUNT];
@@ -57,6 +61,7 @@ typedef struct {
     // Persistent overlay (battery + screen chip rendered on lv_layer_top)
     lv_obj_t *ovr_screen_chip;
     lv_obj_t *ovr_battery;
+    lv_obj_t *ovr_lock;     // lakat ikon (closed=lock / open=unlocked)
 
     // Now Playing widgets
     lv_obj_t *np_img_cover;
@@ -76,6 +81,7 @@ typedef struct {
     lv_obj_t *set_val_volume;
     lv_obj_t *set_val_battery;
     lv_obj_t *set_val_idle;
+    lv_obj_t *set_val_sleep;
     // Settings widgets — szerkeszthető sorok (kurzor + edit highlight ide kerül)
     lv_obj_t *set_row[UI_SETTING_COUNT];   // [VOLUME], [IDLE_TIMEOUT]
 
@@ -243,6 +249,13 @@ static void build_overlay(void)
     lv_obj_set_style_text_color(U.ovr_battery, COL_TEXT_DIM, LV_PART_MAIN);
     lv_label_set_text(U.ovr_battery, LV_SYMBOL_BATTERY_FULL " ---");
     lv_obj_align(U.ovr_battery, LV_ALIGN_TOP_RIGHT, -8, 6);
+
+    // Lakat ikon a center-top-on. Default: open () — io_init beolvassa
+    // a switch valódi állapotát és frissíti, ha kell.
+    U.ovr_lock = lv_label_create(top);
+    lv_obj_set_style_text_color(U.ovr_lock, COL_TEXT_DIM, LV_PART_MAIN);
+    lv_label_set_text(U.ovr_lock, "\xEF\x82\x9C");   // 0xF09C — lock-open
+    lv_obj_align(U.ovr_lock, LV_ALIGN_TOP_MID, 0, 6);
 }
 
 static void update_screen_chip(void)
@@ -389,9 +402,8 @@ static void build_settings(void)
 
     // Sorrend: fent a nem-szerkeszthetők, alul a szerkeszthetők (kurzor csak
     // az utóbbiakon mozog). Egy blokk, vizuális szeparátor nélkül.
-    settings_row(panel, LV_SYMBOL_BATTERY_FULL, "Battery", &U.set_val_battery);
 
-    // Egy "info" sor — nincs value oldal, csak a szöveg balra.
+    // "Info" sor — nincs value oldal, csak a szöveg balra.
     {
         lv_obj_t *info = lv_obj_create(panel);
         lv_obj_remove_style_all(info);
@@ -402,11 +414,16 @@ static void build_settings(void)
         lv_obj_set_style_text_color(lbl, COL_TEXT_DIM, 0);
     }
 
+    settings_row(panel, LV_SYMBOL_BATTERY_FULL, "Battery", &U.set_val_battery);
+
     U.set_row[UI_SETTING_VOLUME] =
         settings_row(panel, LV_SYMBOL_VOLUME_MAX, "Volume",  &U.set_val_volume);
     U.set_row[UI_SETTING_IDLE_TIMEOUT] =
         settings_row(panel, NULL, "Display off", &U.set_val_idle);
-    if (U.set_val_idle) idle_label_refresh_locked();   // induló érték kiírása
+    U.set_row[UI_SETTING_SLEEP] =
+        settings_row(panel, NULL, "Sleep", &U.set_val_sleep);
+    if (U.set_val_idle)  idle_label_refresh_locked();   // induló érték kiírása
+    if (U.set_val_sleep) lv_label_set_text(U.set_val_sleep, s_sleep_enabled ? "On" : "Off");
 
     settings_render_cursor_locked();   // induló kurzor a Volume-on
 }
@@ -780,6 +797,34 @@ void ui_settings_set_editing(bool on)
 ui_setting_t ui_settings_get_cursor(void)
 {
     return (ui_setting_t)s_set_cursor;
+}
+
+void ui_set_sleep_enabled(bool enabled)
+{
+    s_sleep_enabled = enabled;
+    lvgl_port_lock(0);
+    if (U.set_val_sleep) lv_label_set_text(U.set_val_sleep, enabled ? "On" : "Off");
+    lvgl_port_unlock();
+}
+
+bool ui_get_sleep_enabled(void) { return s_sleep_enabled; }
+
+bool ui_toggle_sleep_enabled(void)
+{
+    ui_set_sleep_enabled(!s_sleep_enabled);
+    return s_sleep_enabled;
+}
+
+void ui_set_locked(bool locked)
+{
+    lvgl_port_lock(0);
+    if (U.ovr_lock) {
+        // 0xF023 = lock (closed) ; 0xF09C = lock-open
+        lv_label_set_text(U.ovr_lock, locked ? "\xEF\x80\xA3" : "\xEF\x82\x9C");
+        lv_obj_set_style_text_color(U.ovr_lock,
+                                    locked ? COL_ACCENT : COL_TEXT_DIM, LV_PART_MAIN);
+    }
+    lvgl_port_unlock();
 }
 
 static void fmt_mmss(uint32_t ms, char *buf, int n)

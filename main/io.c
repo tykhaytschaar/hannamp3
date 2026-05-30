@@ -9,6 +9,7 @@
 #include "iot_button.h"
 #include "button_gpio.h"
 
+#include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
@@ -18,8 +19,11 @@
 
 static const char *TAG = "io";
 
-static btn_cb_t s_btn_cb = NULL;
-static bat_cb_t s_bat_cb = NULL;
+static btn_cb_t  s_btn_cb  = NULL;
+static bat_cb_t  s_bat_cb  = NULL;
+static lock_cb_t s_lock_cb = NULL;
+
+static volatile bool s_locked = false;
 
 static adc_oneshot_unit_handle_t s_adc;
 static adc_cali_handle_t         s_cali = NULL;
@@ -133,6 +137,31 @@ static void battery_task(void *arg)
     }
 }
 
+// LOCK tolókapcsoló pollozása. Polling 100 ms-onként + 30 ms debounce
+// (slide switch néha visszapattan).
+static void lock_task(void *arg)
+{
+    bool prev_raw = (gpio_get_level(PIN_LOCK_SWITCH) == 0);
+    s_locked = prev_raw;
+    if (s_lock_cb) s_lock_cb(s_locked);
+
+    while (1) {
+        vTaskDelay(pdMS_TO_TICKS(100));
+        bool now_raw = (gpio_get_level(PIN_LOCK_SWITCH) == 0);
+        if (now_raw != prev_raw) {
+            vTaskDelay(pdMS_TO_TICKS(30));
+            now_raw = (gpio_get_level(PIN_LOCK_SWITCH) == 0);
+        }
+        if (now_raw != s_locked) {
+            s_locked = now_raw;
+            if (s_lock_cb) s_lock_cb(s_locked);
+        }
+        prev_raw = now_raw;
+    }
+}
+
+bool io_is_locked(void) { return s_locked; }
+
 void io_init(void)
 {
     setup_button(PIN_BTN_PLAY,     BTN_EVT_PLAY_PAUSE, false);
@@ -160,7 +189,19 @@ void io_init(void)
     }
 
     xTaskCreate(battery_task, "battery", 4096, NULL, 3, NULL);
+
+    // ---- LOCK tolókapcsoló ----
+    gpio_config_t lk = {
+        .pin_bit_mask = 1ULL << PIN_LOCK_SWITCH,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&lk);
+    xTaskCreate(lock_task, "lock", 2048, NULL, 3, NULL);
 }
 
-void io_register_button_cb(btn_cb_t cb)  { s_btn_cb = cb; }
-void io_register_battery_cb(bat_cb_t cb) { s_bat_cb = cb; }
+void io_register_button_cb(btn_cb_t cb)   { s_btn_cb  = cb; }
+void io_register_battery_cb(bat_cb_t cb)  { s_bat_cb  = cb; }
+void io_register_lock_cb(lock_cb_t cb)    { s_lock_cb = cb; }

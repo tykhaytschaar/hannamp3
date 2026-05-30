@@ -97,6 +97,7 @@ int  ui_cycle_idle_timeout(int dir);
 typedef enum {
     UI_SETTING_VOLUME = 0,
     UI_SETTING_IDLE_TIMEOUT,
+    UI_SETTING_SLEEP,
     UI_SETTING_COUNT
 } ui_setting_t;
 
@@ -104,3 +105,13 @@ void          ui_settings_move_cursor(int delta);
 bool          ui_settings_is_editing(void);
 void          ui_settings_set_editing(bool on);
 ui_setting_t  ui_settings_get_cursor(void);
+
+// Sleep on/off — ha enabled és minden feltétel teljesül, a player_task
+// deep sleep-be megy. A player.c menti NVS-be (sleep_en key).
+void ui_set_sleep_enabled(bool enabled);
+bool ui_get_sleep_enabled(void);
+bool ui_toggle_sleep_enabled(void);   // visszaadja az új értéket
+
+// Lakat ikon a header-ben: állapot átkapcsolása. io_init hívja induláskor
+// + a switch változásakor.
+void ui_set_locked(bool locked);

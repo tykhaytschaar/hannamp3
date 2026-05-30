@@ -11,12 +11,13 @@ GND-re. Belső pull-up engedélyezve, lenyomáskor LOW.
 
 | Gomb | ESP32-S3 GPIO | Funkció |
 |---|---|---|
-| **Play / Pause** | **GPIO 1** | Lejátszás indítása vagy szüneteltetése |
+| **Menu** | **GPIO 1** | Screen váltás (rövid) / SD újraolvasás (hosszú). RTC-capable → deep sleep wake forrás (500 ms hold-press szükséges) |
 | **Next** | **GPIO 2** | Következő szám |
 | **Prev** | **GPIO 42** | Előző szám |
-| **Menu** | **GPIO 41** | SD újraolvasás (későbbi: beállítások menü) |
-| **Vol +** | **GPIO 38** | Hangerő +5% (tartva folyamatosan emel) |
-| **Vol −** | **GPIO 39** | Hangerő −5% (tartva folyamatosan csökkent) |
+| **Play / Pause** | **GPIO 41** | Lejátszás indítása vagy szüneteltetése |
+| **Vol +** | **GPIO 38** | Hangerő +5% / Settings kurzor fel / edit-en belül érték + |
+| **Vol −** | **GPIO 39** | Hangerő −5% / Settings kurzor le / edit-en belül érték − |
+| **Lock** (tolókapcsoló) | **GPIO 17** | Slide switch. GND-re zár (LOW) = locked, minden gomb-event eldobódik |
 
 A `Vol +` és `Vol −` támogat **hold-to-repeat**-et: nyomva tartva ~120 ms-onként
 újra-kiadja az eventet.

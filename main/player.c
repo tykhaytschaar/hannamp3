@@ -15,6 +15,8 @@
 #include "io.h"
 #include "player.h"
 #include "esp_timer.h"
+#include "esp_sleep.h"
+#include "driver/gpio.h"
 
 static const char *TAG = "player";
 
@@ -162,6 +164,12 @@ static void browser_activate(void)
 
 void player_handle_button(btn_event_t evt)
 {
+    // Lock tolókapcsoló LOW: minden gombnyomást eldobunk (kivéve magát a
+    // lock-eseményt, de az nem button — az slide switch a polling task-on át
+    // megy az UI-ra). Az idle timer-t sem nullázzuk, hogy a display-off
+    // megtörténjen pocket-ban is.
+    if (io_is_locked()) return;
+
     // Ha sötét volt a kijelző, ez a gombnyomás CSAK ébresztés — a tényleges
     // funkciót (play/next/menu/stb.) nem hajtjuk végre. A felhasználónak még
     // egy gombnyomás kell, hogy érvényesüljön.
@@ -261,6 +269,11 @@ void player_handle_button(btn_event_t evt)
                     persist_set_i32("idle_s", v);
                     break;
                 }
+                case UI_SETTING_SLEEP: {
+                    bool en = ui_toggle_sleep_enabled();   // on/off — dir mindegy
+                    persist_set_i32("sleep_en", en ? 1 : 0);
+                    break;
+                }
                 default: break;
                 }
             }
@@ -282,10 +295,22 @@ static void on_battery(uint16_t mv, uint8_t pct)
     ui_set_battery(mv, pct);
 }
 
+// Deep sleep: csak Menu gombról ébredünk (RTC GPIO 1, EXT1 wake = LOW level).
+// Boot oldalon (main.c) a wake-after 500 ms-os hold-check validálja.
+#define SLEEP_IDLE_MS  (60 * 1000)   // 1 perc tétlenség + nincs lejátszás → sleep
+
+static void enter_deep_sleep(void)
+{
+    ESP_LOGI(TAG, "deep sleep — wake source MENU (GPIO %d)", PIN_BTN_MENU);
+    esp_sleep_enable_ext1_wakeup_io(1ULL << PIN_BTN_MENU, ESP_EXT1_WAKEUP_ANY_LOW);
+    esp_deep_sleep_start();
+}
+
 static void player_task(void *arg)
 {
     audio_state_t last_state = AUDIO_STATE_STOPPED;
     uint32_t last_pos_print = 0;
+    int64_t  not_playing_since_us = esp_timer_get_time();
 
     while (1) {
         audio_status_t st;
@@ -302,9 +327,25 @@ static void player_task(void *arg)
             }
         }
         last_state = st.state;
-        ui_idle_check();   // 30 s tétlenség → DISPOFF
+        ui_idle_check();   // tétlenség → DISPOFF + BL off
+
+        // Sleep döntés: ha enabled, és nincs lejátszás SLEEP_IDLE_MS óta.
+        // Playing alatt a timer folyamatosan resettelődik (sose alszik el).
+        if (st.state == AUDIO_STATE_PLAYING) {
+            not_playing_since_us = esp_timer_get_time();
+        } else if (ui_get_sleep_enabled()) {
+            int64_t idle_ms = (esp_timer_get_time() - not_playing_since_us) / 1000;
+            if (idle_ms >= SLEEP_IDLE_MS) {
+                enter_deep_sleep();   // nem tér vissza
+            }
+        }
         vTaskDelay(pdMS_TO_TICKS(200));
     }
+}
+
+static void on_lock_changed(bool locked)
+{
+    ui_set_locked(locked);
 }
 
 void player_start(void)
@@ -320,6 +361,8 @@ void player_start(void)
 
     io_register_button_cb(player_handle_button);
     io_register_battery_cb(on_battery);
+    io_register_lock_cb(on_lock_changed);
+    ui_set_locked(io_is_locked());   // induló állapot a header ikonon
 
     // UI alapállapot
     audio_set_volume(70);
@@ -336,6 +379,11 @@ void player_start(void)
         }
     }
     ui_set_idle_timeout_s(saved_idle);
+
+    // Sleep enabled visszaolvasása (default 0 = kikapcsolva).
+    int32_t saved_sleep_en = 0;
+    persist_get_i32("sleep_en", &saved_sleep_en);
+    ui_set_sleep_enabled(saved_sleep_en != 0);
 
     // Böngésző: ha van mentett könyvtár és még létezik, oda térünk vissza,
     // különben az SD gyökeréből indulunk.
