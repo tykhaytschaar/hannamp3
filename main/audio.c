@@ -56,6 +56,25 @@ static int s_fade_in_remaining = 0;
 static int s_fade_in_total     = 0;
 #define FADE_IN_SAMPLES_PER_CHAN  (100 * 44100 / 1000)
 
+// Fájlformátum
+typedef enum {
+    FMT_MP3,
+    FMT_WAV,
+} audio_format_t;
+
+static audio_format_t s_format         = FMT_MP3;
+// WAV state (csak FMT_WAV-on használt)
+static uint32_t       s_wav_sample_rate = 44100;
+static int            s_wav_channels    = 2;
+static int            s_wav_bits        = 16;
+static uint32_t       s_wav_data_total  = 0;
+static uint32_t       s_wav_data_played = 0;
+
+// MP3 resilience: ha N egymás utáni decode/sync fail után sincs jó frame,
+// feladjuk és STOPPED-ba kerülünk (különben sosem érne véget a tight loop).
+static int s_mp3_fail_streak = 0;
+#define MP3_FAIL_STREAK_MAX  64
+
 static inline void xsmt_mute(void)   { gpio_set_level(PIN_XSMT, 0); }
 static inline void xsmt_unmute(void) { gpio_set_level(PIN_XSMT, 1); }
 
@@ -252,32 +271,90 @@ static void audio_task(void *arg)
                     fseek(fp, 0, SEEK_END);
                     file_size = ftell(fp);
                     fseek(fp, 0, SEEK_SET);
-                    // ID3v2 tag a fájl elején? Ugorjuk át — a Helix nem érti.
-                    uint8_t id3[10];
-                    if (fread(id3, 1, 10, fp) == 10 &&
-                        id3[0] == 'I' && id3[1] == 'D' && id3[2] == '3') {
-                        // synchsafe 28-bit méret a 6..9 byte-on
-                        uint32_t tag_size = ((id3[6] & 0x7F) << 21) |
-                                            ((id3[7] & 0x7F) << 14) |
-                                            ((id3[8] & 0x7F) << 7)  |
-                                             (id3[9] & 0x7F);
-                        if (id3[5] & 0x10) tag_size += 10;   // footer flag
-                        fseek(fp, tag_size, SEEK_CUR);
-                        ESP_LOGI(TAG, "Skipped ID3v2 tag (%lu bytes)",
-                                 (unsigned long)(tag_size + 10));
+
+                    // Formátum-detekció a fájl elejéről: RIFF...WAVE → WAV,
+                    // ID3 vagy MP3 sync → MP3. Egyébként reject.
+                    uint8_t hdr[12];
+                    int got = fread(hdr, 1, 12, fp);
+                    s_format = FMT_MP3;   // default; lent felülírjuk ha WAV
+                    if (got == 12 && memcmp(hdr, "RIFF", 4) == 0 &&
+                        memcmp(hdr + 8, "WAVE", 4) == 0) {
+                        // WAV: chunk-okat olvasunk, amíg fmt + data megvan.
+                        s_format = FMT_WAV;
+                        s_wav_data_total = 0;
+                        s_wav_data_played = 0;
+                        bool fmt_ok = false, data_ok = false, fmt_unsupported = false;
+                        while (!fmt_unsupported && !(fmt_ok && data_ok)) {
+                            uint8_t ck[8];
+                            if (fread(ck, 1, 8, fp) != 8) break;
+                            uint32_t sz = ck[4] | (ck[5]<<8) | (ck[6]<<16) | (ck[7]<<24);
+                            if (memcmp(ck, "fmt ", 4) == 0) {
+                                uint8_t f[16];
+                                int fg = fread(f, 1, sz > 16 ? 16 : sz, fp);
+                                if (fg >= 16) {
+                                    int format = f[0] | (f[1] << 8);
+                                    s_wav_channels    = f[2] | (f[3] << 8);
+                                    s_wav_sample_rate = f[4] | (f[5]<<8) | (f[6]<<16) | (f[7]<<24);
+                                    s_wav_bits        = f[14] | (f[15] << 8);
+                                    if (format != 1 || s_wav_bits != 16 ||
+                                        (s_wav_channels != 1 && s_wav_channels != 2)) {
+                                        ESP_LOGE(TAG, "WAV unsupported: fmt=%d, %d-bit, %d ch (csak PCM 16-bit mono/stereo)",
+                                                 format, s_wav_bits, s_wav_channels);
+                                        fmt_unsupported = true;
+                                    } else {
+                                        fmt_ok = true;
+                                    }
+                                    if (sz > 16) fseek(fp, sz - 16, SEEK_CUR);
+                                }
+                            } else if (memcmp(ck, "data", 4) == 0) {
+                                s_wav_data_total = sz;
+                                data_ok = true;
+                                break;   // fájlpozíció a PCM-adat elején
+                            } else {
+                                fseek(fp, sz, SEEK_CUR);   // egyéb chunk-okat átugorjuk
+                            }
+                        }
+                        if (!fmt_ok || !data_ok) {
+                            ESP_LOGE(TAG, "Invalid/unsupported WAV (fmt=%d data=%d)",
+                                     fmt_ok, data_ok);
+                            fclose(fp); fp = NULL;
+                        } else {
+                            ESP_LOGI(TAG, "Play WAV %s (%lu B data, %lu Hz %d ch %d-bit)",
+                                     msg.path, (unsigned long)s_wav_data_total,
+                                     (unsigned long)s_wav_sample_rate,
+                                     s_wav_channels, s_wav_bits);
+                        }
                     } else {
-                        fseek(fp, 0, SEEK_SET);              // nincs ID3, vissza az elejére
+                        // MP3: ID3v2 tag a fájl elején? Ugorjuk át.
+                        fseek(fp, 0, SEEK_SET);
+                        uint8_t id3[10];
+                        if (fread(id3, 1, 10, fp) == 10 &&
+                            id3[0] == 'I' && id3[1] == 'D' && id3[2] == '3') {
+                            uint32_t tag_size = ((id3[6] & 0x7F) << 21) |
+                                                ((id3[7] & 0x7F) << 14) |
+                                                ((id3[8] & 0x7F) << 7)  |
+                                                 (id3[9] & 0x7F);
+                            if (id3[5] & 0x10) tag_size += 10;
+                            fseek(fp, tag_size, SEEK_CUR);
+                            ESP_LOGI(TAG, "Skipped ID3v2 tag (%lu bytes)",
+                                     (unsigned long)(tag_size + 10));
+                        } else {
+                            fseek(fp, 0, SEEK_SET);
+                        }
+                        ESP_LOGI(TAG, "Play MP3 %s (%lu B)", msg.path,
+                                 (unsigned long)file_size);
                     }
                 }
                 ui_spi_unlock();
                 if (!fp) {
-                    ESP_LOGE(TAG, "fopen %s failed", msg.path);
+                    ESP_LOGE(TAG, "fopen/parse %s failed", msg.path);
                     status_set(AUDIO_STATE_STOPPED);
                     break;
                 }
                 in_bytes = 0;
                 in_ptr   = inbuf;
                 total_samples = 0;
+                s_mp3_fail_streak = 0;
                 // I2S enable nem itt — setup_i2s() építi újra az első frame után.
                 playing = true;
                 s_pending_unmute = true;   // unmute az első új i2s_write után
@@ -310,64 +387,130 @@ static void audio_task(void *arg)
 
         if (!playing) continue;
 
-        // Buffer feltöltése, ha kevés van benne.
-        if (in_bytes < 2 * 1024) {
-            if (in_ptr != inbuf && in_bytes > 0) {
-                memmove(inbuf, in_ptr, in_bytes);
-            }
-            in_ptr = inbuf;
-            int want = MP3_READ_BUF_SIZE - in_bytes;
-            // SD + LCD közös SPI buszon — lockoljuk az LVGL-t a fread idejére,
-            // különben a SPI HAL panikol a párhuzamos hozzáférés miatt.
-            ui_spi_lock();
-            int got  = fread(inbuf + in_bytes, 1, want, fp);
-            ui_spi_unlock();
-            in_bytes += got;
-            if (got == 0 && in_bytes == 0) {
-                // EOF
+        int samples = 0;   // L+R interleaved sample-count az outbuf-ban
+        uint32_t cur_samprate = 44100;
+        uint8_t  cur_chans    = 2;
+        uint32_t pos_ms = 0, dur_ms = 0;
+
+        if (s_format == FMT_WAV) {
+            // WAV: a fájlpozíció pont a PCM data chunk elején van a CMD_PLAY után.
+            // Outbufba olvasunk legfeljebb annyit amennyi még a data chunk-ban van.
+            uint32_t remain = (s_wav_data_total > s_wav_data_played)
+                              ? (s_wav_data_total - s_wav_data_played) : 0;
+            int want = MP3_OUT_BUF_BYTES;
+            if (s_wav_channels == 1) want /= 2;   // mono után duplázunk → fél akkora kell
+            if ((uint32_t)want > remain) want = remain;
+            if (want == 0) {
                 fclose(fp); fp = NULL;
                 playing = false;
                 i2s_set_enabled(false);
                 status_set(AUDIO_STATE_FINISHED);
                 continue;
             }
-        }
-
-        int offset = MP3FindSyncWord(in_ptr, in_bytes);
-        if (offset < 0) {
-            // nincs sync — eldobjuk és újratöltünk
-            in_bytes = 0;
-            continue;
-        }
-        in_ptr   += offset;
-        in_bytes -= offset;
-
-        int bytes_left = in_bytes;
-        int res = MP3Decode(hMP3, &in_ptr, &bytes_left, outbuf, 0);
-        int consumed = in_bytes - bytes_left;
-        in_bytes = bytes_left;
-
-        if (res != ERR_MP3_NONE) {
-            ESP_LOGW(TAG, "MP3Decode err=%d, skip", res);
-            // egy byte-tal előrébb és újrapróbáljuk
-            if (in_bytes > 0) { in_ptr++; in_bytes--; }
-            continue;
-        }
-
-        MP3FrameInfo info;
-        MP3GetLastFrameInfo(hMP3, &info);
-
-        setup_i2s(info.samprate);
-
-        int samples = info.outputSamps;   // L+R interleaved
-        // Ha mono jönne, duplázunk stereo-vá (PCM5102 mindig stereo).
-        if (info.nChans == 1) {
-            // outputSamps mono frame-nél a mintaszám 1 csatornán → duplázunk helyben
-            for (int i = samples - 1; i >= 0; i--) {
-                outbuf[2 * i]     = outbuf[i];
-                outbuf[2 * i + 1] = outbuf[i];
+            ui_spi_lock();
+            int got = fread(outbuf, 1, want, fp);
+            ui_spi_unlock();
+            if (got <= 0) {
+                fclose(fp); fp = NULL;
+                playing = false;
+                i2s_set_enabled(false);
+                status_set(AUDIO_STATE_FINISHED);
+                continue;
             }
-            samples *= 2;
+            s_wav_data_played += got;
+            samples = got / 2;   // int16 / sample
+            if (s_wav_channels == 1) {
+                // Mono → stereo helyben, hátulról előre.
+                for (int i = samples - 1; i >= 0; i--) {
+                    outbuf[2*i]     = outbuf[i];
+                    outbuf[2*i + 1] = outbuf[i];
+                }
+                samples *= 2;
+            }
+            cur_samprate = s_wav_sample_rate;
+            cur_chans    = s_wav_channels;
+            setup_i2s(cur_samprate);
+
+            // Pozíció: data-bytes / (channels * 2) = samples / channel.
+            uint32_t played_pc = s_wav_data_played / (s_wav_channels * 2);
+            uint32_t total_pc  = s_wav_data_total  / (s_wav_channels * 2);
+            pos_ms = (uint64_t)played_pc * 1000 / s_wav_sample_rate;
+            dur_ms = (uint64_t)total_pc  * 1000 / s_wav_sample_rate;
+        } else {
+            // MP3: a Helix dekódolóra megyünk a buffer-bemenettel.
+            if (in_bytes < 2 * 1024) {
+                if (in_ptr != inbuf && in_bytes > 0) {
+                    memmove(inbuf, in_ptr, in_bytes);
+                }
+                in_ptr = inbuf;
+                int want = MP3_READ_BUF_SIZE - in_bytes;
+                ui_spi_lock();
+                int got  = fread(inbuf + in_bytes, 1, want, fp);
+                ui_spi_unlock();
+                in_bytes += got;
+                if (got == 0 && in_bytes == 0) {
+                    fclose(fp); fp = NULL;
+                    playing = false;
+                    i2s_set_enabled(false);
+                    status_set(AUDIO_STATE_FINISHED);
+                    continue;
+                }
+            }
+
+            int offset = MP3FindSyncWord(in_ptr, in_bytes);
+            if (offset < 0) {
+                in_bytes = 0;
+                if (++s_mp3_fail_streak > MP3_FAIL_STREAK_MAX) {
+                    ESP_LOGE(TAG, "MP3 sync nem található %d próbálkozás után — abort",
+                             s_mp3_fail_streak);
+                    fclose(fp); fp = NULL;
+                    playing = false;
+                    i2s_set_enabled(false);
+                    status_set(AUDIO_STATE_STOPPED);
+                }
+                continue;
+            }
+            in_ptr   += offset;
+            in_bytes -= offset;
+
+            int bytes_left = in_bytes;
+            int res = MP3Decode(hMP3, &in_ptr, &bytes_left, outbuf, 0);
+            in_bytes = bytes_left;
+
+            if (res != ERR_MP3_NONE) {
+                if (++s_mp3_fail_streak > MP3_FAIL_STREAK_MAX) {
+                    ESP_LOGE(TAG, "MP3Decode %d egymás utáni hiba (utolsó err=%d) — abort",
+                             s_mp3_fail_streak, res);
+                    fclose(fp); fp = NULL;
+                    playing = false;
+                    i2s_set_enabled(false);
+                    status_set(AUDIO_STATE_STOPPED);
+                } else {
+                    ESP_LOGW(TAG, "MP3Decode err=%d, skip", res);
+                    if (in_bytes > 0) { in_ptr++; in_bytes--; }
+                }
+                continue;
+            }
+            s_mp3_fail_streak = 0;
+
+            MP3FrameInfo info;
+            MP3GetLastFrameInfo(hMP3, &info);
+            setup_i2s(info.samprate);
+
+            samples = info.outputSamps;
+            if (info.nChans == 1) {
+                for (int i = samples - 1; i >= 0; i--) {
+                    outbuf[2 * i]     = outbuf[i];
+                    outbuf[2 * i + 1] = outbuf[i];
+                }
+                samples *= 2;
+            }
+            cur_samprate = info.samprate;
+            cur_chans    = info.nChans;
+            total_samples += samples / 2;
+            pos_ms = (uint64_t)total_samples * 1000 / info.samprate;
+            if (info.bitrate > 0) bitrate_kbps = info.bitrate / 1000;
+            dur_ms = bitrate_kbps ? (file_size * 8 / bitrate_kbps) : 0;
         }
 
         uint8_t vol = audio_get_volume();
@@ -402,12 +545,7 @@ static void audio_task(void *arg)
             s_pending_unmute = false;
         }
 
-        // pozíció becslés
-        total_samples += samples / 2;   // per channel
-        uint32_t pos_ms = (uint64_t)total_samples * 1000 / info.samprate;
-        if (info.bitrate > 0) bitrate_kbps = info.bitrate / 1000;
-        uint32_t dur_ms = bitrate_kbps ? (file_size * 8 / bitrate_kbps) : 0;
-        status_update(pos_ms, dur_ms, info.samprate, info.nChans);
+        status_update(pos_ms, dur_ms, cur_samprate, cur_chans);
     }
 }
 
@@ -449,6 +587,8 @@ void audio_play(const char *path)
 void audio_stop(void)   { audio_msg_t m = { .cmd = CMD_STOP   }; xQueueSend(s_cmd_q, &m, 0); }
 void audio_pause(void)  { audio_msg_t m = { .cmd = CMD_PAUSE  }; xQueueSend(s_cmd_q, &m, 0); }
 void audio_resume(void) { audio_msg_t m = { .cmd = CMD_RESUME }; xQueueSend(s_cmd_q, &m, 0); }
+
+void audio_dac_mute(void) { xsmt_mute(); }
 
 void audio_set_volume(uint8_t v) {
     if (v > 100) v = 100;

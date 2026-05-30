@@ -123,6 +123,11 @@ static void select_current(bool autoplay)
     if (s_idx < 0) s_idx = s_count - 1;
     if (s_idx >= s_count) s_idx = 0;
 
+    // Prev/next közben a régi track még szól, és az ui_show_track album-cover-
+    // betöltése foglalja a SPI buszt → DMA underrun → glitch. Mute-oljuk a
+    // DAC-ot azonnal, a CMD_PLAY úgyis ezt teszi pár ms múlva.
+    if (autoplay) audio_dac_mute();
+
     ui_show_track(&s_tracks[s_idx]);
     ui_set_playlist(s_tracks, s_count, s_idx);
     persist_set_str("last_file", s_tracks[s_idx].path);   // utoljára nyitott fájl

@@ -73,4 +73,8 @@
 // -----------------------------------------------------------------------------
 #define MP3_READ_BUF_SIZE   (8 * 1024)
 #define MP3_OUT_BUF_SAMPLES 1152          // Helix maximum frame
-#define MP3_OUT_BUF_BYTES   (MP3_OUT_BUF_SAMPLES * 2 * sizeof(int16_t))
+// Out-buffer méret: MP3-nál csak 4608 byte / frame, de WAV-nál nagyobb
+// chunk-okat olvasunk (kevesebb SD/SPI round-trip) — 8 KB ≈ 46 ms @ 44.1k
+// stereo. Mono WAV duplikációval éppen kifut a 8 KB-ig.
+#define WAV_CHUNK_BYTES     (8 * 1024)
+#define MP3_OUT_BUF_BYTES   WAV_CHUNK_BYTES

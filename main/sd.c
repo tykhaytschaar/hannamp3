@@ -83,7 +83,7 @@ static int scan_album_dir(const char *album_path, const char *album_name,
     struct dirent *e;
     while ((e = readdir(d)) != NULL && n < max_tracks) {
         if (e->d_name[0] == '.') continue;
-        if (!has_ext(e->d_name, ".mp3")) continue;
+        if (!has_ext(e->d_name, ".mp3") && !has_ext(e->d_name, ".wav")) continue;
 
         snprintf(tracks[n].path, sizeof(tracks[n].path), "%s/%s", album_path, e->d_name);
 
@@ -94,7 +94,7 @@ static int scan_album_dir(const char *album_path, const char *album_name,
         strncpy(tracks[n].name, e->d_name, sizeof(tracks[n].name) - 1);
         tracks[n].name[sizeof(tracks[n].name) - 1] = 0;
         int len = strlen(tracks[n].name);
-        if (len > 4) tracks[n].name[len - 4] = 0;  // .mp3 lecsap
+        if (len > 4) tracks[n].name[len - 4] = 0;  // .mp3 / .wav lecsap
         n++;
     }
     closedir(d);
@@ -185,7 +185,8 @@ int sd_list_dir(const char *path, dir_entry_t *out, int max_entries)
     while ((e = readdir(d)) != NULL && n < max_entries) {
         if (e->d_name[0] == '.') continue;
         bool is_dir = (e->d_type == DT_DIR);
-        if (!is_dir && !has_ext(e->d_name, ".mp3")) continue;  // csak mappa + mp3
+        if (!is_dir && !has_ext(e->d_name, ".mp3")
+                    && !has_ext(e->d_name, ".wav")) continue;
         strncpy(out[n].name, e->d_name, sizeof(out[n].name) - 1);
         out[n].name[sizeof(out[n].name) - 1] = 0;
         out[n].is_dir = is_dir;

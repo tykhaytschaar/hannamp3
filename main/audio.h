@@ -33,3 +33,9 @@ void audio_set_volume(uint8_t vol);
 uint8_t audio_get_volume(void);
 
 void audio_get_status(audio_status_t *out);
+
+// Azonnali DAC mute (XSMT = LOW). A player.c hívja prev/next előtt, hogy az
+// ui_show_track album-cover-betöltése okozta SPI-bus blokkolás (és emiatti
+// DMA underrun) ne hallatsszon glitch-ként a régi track végén. Maga az
+// audio_play CMD_PLAY-ja is mute-ol, ez csak előbbre hozza azt a pillanatot.
+void audio_dac_mute(void);
