@@ -7,9 +7,11 @@
 #define SD_SPI_HOST  SPI2_HOST
 
 typedef struct {
-    char path[384];   // teljes elérési út
-    char album[96];   // album mappa neve
-    char name[128];   // track fájlnév (kiterjesztés nélkül)
+    char path[384];     // teljes elérési út
+    char album[96];     // album: ID3 TALB/TAL, vagy fallback a mappa neve
+    char name[128];     // track fájlnév (kiterjesztés nélkül) — fallback a title-höz
+    char title[128];    // ID3 TIT2/TT2 (UTF-8). Üres ha nincs ID3.
+    char artist[96];    // ID3 TPE1/TP1 (UTF-8). Üres ha nincs ID3.
 } track_t;
 
 // Egy könyvtár-bejegyzés a böngészőhöz (almappa vagy .mp3 fájl).

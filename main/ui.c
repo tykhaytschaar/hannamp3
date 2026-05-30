@@ -605,11 +605,22 @@ void ui_show_track(const track_t *tr)
 {
     lvgl_port_lock(0);
     if (U.np_lbl_title) {
-        // A meglévő hívók a track_t-ben album és name mezőket adnak.
-        // Az új layoutban külön sorba kerül az artist/album.
-        lv_label_set_text(U.np_lbl_title, tr->name);
+        // Title: ID3 TIT2 preferált, fallback filename.
+        const char *title = tr->title[0] ? tr->title : tr->name;
+        lv_label_set_text(U.np_lbl_title, title);
+
         if (U.np_lbl_subtitle) {
-            lv_label_set_text(U.np_lbl_subtitle, tr->album[0] ? tr->album : "");
+            // Subtitle: "Artist · Album" ha mindkettő van; egyik ha csak az;
+            // mappa-név fallback ha ID3 nincs.
+            char line[256];
+            if (tr->artist[0] && tr->album[0]) {
+                snprintf(line, sizeof(line), "%s \xC2\xB7 %s", tr->artist, tr->album);
+            } else if (tr->artist[0]) {
+                snprintf(line, sizeof(line), "%s", tr->artist);
+            } else {
+                snprintf(line, sizeof(line), "%s", tr->album[0] ? tr->album : "");
+            }
+            lv_label_set_text(U.np_lbl_subtitle, line);
         }
     }
 
