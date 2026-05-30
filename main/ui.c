@@ -240,6 +240,13 @@ static void build_overlay(void)
     // alatta legyen elérhető.
     lv_obj_remove_flag(top, LV_OBJ_FLAG_CLICKABLE);
 
+    // Default font az overlay layerre — az itt létrehozott labelek (battery,
+    // screen chip, lock indikátor stb.) NEM öröklik a screen text fontját,
+    // így itt is explicit be kell állítani. Különben az LVGL beépített
+    // lv_font_montserrat_14-et használnák, amiben nincsenek a saját
+    // ikonjaink (MP3_SYMBOL_LOCK / MP3_SYMBOL_UNLOCK) — négyzet jelenne meg.
+    lv_obj_set_style_text_font(top, &mp3_inter_12, LV_PART_MAIN);
+
     U.ovr_screen_chip = lv_label_create(top);
     lv_obj_set_style_text_color(U.ovr_screen_chip, COL_ACCENT, LV_PART_MAIN);
     lv_label_set_text(U.ovr_screen_chip, "NOW");
@@ -656,6 +663,15 @@ bool ui_user_activity(void)
         return true;     // ezzel a hívással ébresztettünk
     }
     return false;
+}
+
+void ui_force_wake_pending(void)
+{
+    // Csak a flag-et állítjuk; a kijelző fizikailag már bekapcsolt az
+    // ui_init-ben, az első user-event ui_user_activity-ja no-op-ként
+    // beletalál (DISPON/BL újra HIGH, érdektelen), és true-t ad → a
+    // player_handle_button korai return-be megy.
+    s_disp_off = true;
 }
 
 void ui_idle_check(void)

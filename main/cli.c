@@ -30,7 +30,13 @@ static void set_volume(uint8_t v)
 // `param` a `$` és záró `#` közti rész (üres lehet).
 static void cli_dispatch(const char *cmd, const char *param)
 {
-    ui_user_activity();   // CLI parancs is user-trigger — wake + reset idle timer
+    // Display-off "wake-only first event" — ugyanaz mint a gombnyomásnál:
+    // ha sötét volt a kijelző, ez a parancs CSAK ébreszt, a funkcióját nem
+    // hajtjuk végre. A user-nek még egy parancsot kell küldenie.
+    if (ui_user_activity()) {
+        ESP_LOGI(TAG, "wake from CLI '%s' — command not executed", cmd);
+        return;
+    }
 
     audio_status_t st;
     audio_get_status(&st);

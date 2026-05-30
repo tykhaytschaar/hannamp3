@@ -75,6 +75,13 @@ void ui_browser_set_cursor(int cursor);
 bool ui_user_activity(void);
 void ui_idle_check(void);
 
+// Wake-pending állapot kikényszerítése: a következő ui_user_activity() hívás
+// úgy fog viselkedni, mintha aludt volna a kijelző (visszaadja true, és így
+// a player.c eldobja az adott gombnyomás funkcióját). main.c hívja deep
+// sleep wake után, hogy a wake-triggert ne lehessen összekeverni egy
+// szándékos műveletbe a felhasználó számára.
+void ui_force_wake_pending(void);
+
 // Idle timeout konfiguráció. Értékek: 10, 15, 30 mp, vagy 0 = never.
 // A player.c menti NVS-be (idle_s key) és visszaolvassa bootkor.
 void ui_set_idle_timeout_s(int seconds);

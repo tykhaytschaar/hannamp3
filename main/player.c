@@ -321,10 +321,17 @@ static void player_task(void *arg)
         audio_status_t st;
         audio_get_status(&st);
 
-        // Auto-next ha végzett
+        // Auto-next ha végzett. Mappa végén megállunk loop helyett.
         if (st.state == AUDIO_STATE_FINISHED && last_state != AUDIO_STATE_FINISHED) {
-            s_idx++;
-            play_current();
+            if (s_idx + 1 >= s_count) {
+                ESP_LOGI(TAG, "End of folder (%d tracks), stopping", s_count);
+                audio_stop();
+                ui_set_state(AUDIO_STATE_STOPPED);
+                ui_set_progress(0, 0);
+            } else {
+                s_idx++;
+                play_current();
+            }
         } else if (st.state == AUDIO_STATE_PLAYING) {
             if (st.position_ms / 500 != last_pos_print / 500) {
                 ui_set_progress(st.position_ms, st.duration_ms);
