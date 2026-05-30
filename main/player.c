@@ -29,6 +29,7 @@ static int          s_bcount   = 0;
 static int          s_bcursor  = 0;
 static char         s_bpath[384];   // aktuális könyvtár, SD_MOUNT_POINT-ról indul
 
+
 // --- NVS perzisztencia: böngészett könyvtár + utoljára nyitott fájl ---
 #define NVS_NS  "player"
 
@@ -47,6 +48,24 @@ static bool persist_get_str(const char *key, char *out, size_t out_sz)
     if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return false;
     size_t len = out_sz;
     esp_err_t e = nvs_get_str(h, key, out, &len);
+    nvs_close(h);
+    return e == ESP_OK;
+}
+
+static void persist_set_i32(const char *key, int32_t val)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_i32(h, key, val);
+    nvs_commit(h);
+    nvs_close(h);
+}
+
+static bool persist_get_i32(const char *key, int32_t *out)
+{
+    nvs_handle_t h;
+    if (nvs_open(NVS_NS, NVS_READONLY, &h) != ESP_OK) return false;
+    esp_err_t e = nvs_get_i32(h, key, out);
     nvs_close(h);
     return e == ESP_OK;
 }
@@ -155,6 +174,11 @@ void player_handle_button(btn_event_t evt)
 
     switch (evt) {
     case BTN_EVT_PLAY_PAUSE:
+        if (scr == UI_SCREEN_SETTINGS) {
+            // A Settings oldalon a PLAY semmit nem csinál — ne indítson zenét
+            // és ne legyen mentés-funkció sem (az érték állítás auto-save).
+            break;
+        }
         if (scr == UI_SCREEN_LIBRARY) {
             // Library: fájlon = lejátszás, mappán = belépés.
             browser_activate();
@@ -171,6 +195,12 @@ void player_handle_button(btn_event_t evt)
 
     case BTN_EVT_NEXT:
     case BTN_EVT_PREV: {
+        if (scr == UI_SCREEN_SETTINGS) {
+            // Next = edit be, Prev = edit ki. Az érték-változások auto-save-ek,
+            // ezért nincs revert: Prev egyszerűen csak kilép az edit módból.
+            ui_settings_set_editing(evt == BTN_EVT_NEXT);
+            break;
+        }
         if (scr == UI_SCREEN_LIBRARY) {
             // Library böngésző: Next = be a mappába, Prev = ki a szülőbe.
             if (evt == BTN_EVT_NEXT) browser_enter();
@@ -204,25 +234,46 @@ void player_handle_button(btn_event_t evt)
         break;
 
     case BTN_EVT_VOL_UP:
+    case BTN_EVT_VOL_DOWN: {
+        int dir = (evt == BTN_EVT_VOL_UP) ? +1 : -1;
         if (scr == UI_SCREEN_LIBRARY) {
-            browser_move_cursor(-1);   // böngészőben: kurzor fel
-        } else {
-            uint8_t v = audio_get_volume();
-            v = (v + 2 > 100) ? 100 : v + 2;
-            audio_set_volume(v);
-            ui_set_volume(v);
+            browser_move_cursor(-dir);   // VolUp = kurzor fel
+            break;
         }
-        break;
-    case BTN_EVT_VOL_DOWN:
-        if (scr == UI_SCREEN_LIBRARY) {
-            browser_move_cursor(+1);   // böngészőben: kurzor le
-        } else {
-            uint8_t v = audio_get_volume();
-            v = (v < 2) ? 0 : v - 2;
-            audio_set_volume(v);
-            ui_set_volume(v);
+        if (scr == UI_SCREEN_SETTINGS) {
+            if (!ui_settings_is_editing()) {
+                // Kurzor mozgatása az állítható elemek között (VolUp = fel).
+                ui_settings_move_cursor(-dir);
+            } else {
+                // Edit módban: érték állítása a kiválasztott elemnél.
+                switch (ui_settings_get_cursor()) {
+                case UI_SETTING_VOLUME: {
+                    uint8_t v = audio_get_volume();
+                    if (dir > 0) v = (v + 2 > 100) ? 100 : v + 2;
+                    else         v = (v < 2)       ? 0   : v - 2;
+                    audio_set_volume(v);
+                    ui_set_volume(v);
+                    break;
+                }
+                case UI_SETTING_IDLE_TIMEOUT: {
+                    // Érték állítás + azonnali NVS-mentés (no PLAY-to-save).
+                    int v = ui_cycle_idle_timeout(dir);
+                    persist_set_i32("idle_s", v);
+                    break;
+                }
+                default: break;
+                }
+            }
+            break;
         }
+        // Now Playing: hangerő közvetlen állítás.
+        uint8_t v = audio_get_volume();
+        if (dir > 0) v = (v + 2 > 100) ? 100 : v + 2;
+        else         v = (v < 2)       ? 0   : v - 2;
+        audio_set_volume(v);
+        ui_set_volume(v);
         break;
+    }
     }
 }
 
@@ -276,6 +327,16 @@ void player_start(void)
     uint16_t mv = io_read_battery_mv();
     ui_set_battery(mv, io_battery_percent_from_mv(mv));
 
+    // Idle-timeout visszaolvasása NVS-ből (default 30 s ha még nem volt mentve).
+    int32_t saved_idle = 30;
+    if (persist_get_i32("idle_s", &saved_idle)) {
+        // Csak elfogadott értékek (10/15/30/0). Bármi más → 30.
+        if (saved_idle != 10 && saved_idle != 15 && saved_idle != 30 && saved_idle != 0) {
+            saved_idle = 30;
+        }
+    }
+    ui_set_idle_timeout_s(saved_idle);
+
     // Böngésző: ha van mentett könyvtár és még létezik, oda térünk vissza,
     // különben az SD gyökeréből indulunk.
     strcpy(s_bpath, SD_MOUNT_POINT);
@@ -286,7 +347,6 @@ void player_start(void)
     }
     s_bcursor = 0;
     browser_refresh();
-    ui_set_track_count(s_bcount);
 
     // Utoljára nyitott fájl visszaállítása (ha még létezik): betöltjük a
     // mappáját lejátszási listának és a Now Playing-en mutatjuk — de NEM

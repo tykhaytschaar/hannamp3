@@ -23,6 +23,9 @@
 #define PIN_TFT_DC          GPIO_NUM_9
 #define PIN_TFT_RST         GPIO_NUM_8
 #define PIN_SD_CS           GPIO_NUM_14
+// Háttérvilágítás vezérlő: a panel BLK/LED+ lábát kötjük ide.
+// A modul 3V3 → BLK hidat (0Ω jumper) el kell távolítani.
+#define PIN_BL              GPIO_NUM_16
 
 // -----------------------------------------------------------------------------
 // Gombok (mind GND-re zárnak, belső pull-up)

@@ -75,5 +75,32 @@ void ui_browser_set_cursor(int cursor);
 bool ui_user_activity(void);
 void ui_idle_check(void);
 
-// Tájékoztató panel a Settings képernyőn — a player.c rescan után frissíti.
-void ui_set_track_count(int count);
+// Idle timeout konfiguráció. Értékek: 10, 15, 30 mp, vagy 0 = never.
+// A player.c menti NVS-be (idle_s key) és visszaolvassa bootkor.
+void ui_set_idle_timeout_s(int seconds);
+int  ui_get_idle_timeout_s(void);
+// dir > 0: 10→15→30→Never→10 ; dir <= 0: visszafelé. Visszaadja az új értéket.
+int  ui_cycle_idle_timeout(int dir);
+
+// -----------------------------------------------------------------------------
+// Settings képernyő — kurzor + edit mód az állítható elemek között.
+// A NOW Playing aktuális dal highlightjához hasonlóan:
+//   - kurzor (nem-edit): 3 px accent-színű bal-oldali csík
+//   - edit mód: a teljes sor highlighted (sötétebb háttér + bal csík)
+//
+// Gombok a player.c-ből (Settings képernyőn):
+//   Vol +/−   : edit-en kívül kurzor mozgatása; edit-en belül érték ±
+//   Next      : edit mód bekapcsolása az aktuális elemen
+//   Prev      : edit mód kikapcsolása + revert az eredeti értékre
+//   Play      : edit mód kikapcsolása + perzisztens mentés (NVS)
+// -----------------------------------------------------------------------------
+typedef enum {
+    UI_SETTING_VOLUME = 0,
+    UI_SETTING_IDLE_TIMEOUT,
+    UI_SETTING_COUNT
+} ui_setting_t;
+
+void          ui_settings_move_cursor(int delta);
+bool          ui_settings_is_editing(void);
+void          ui_settings_set_editing(bool on);
+ui_setting_t  ui_settings_get_cursor(void);

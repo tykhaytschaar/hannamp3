@@ -36,6 +36,7 @@ Megosztott SPI2 buszt használ a TFT és az SD. A panel hátoldali címkéi szer
 | CS | GPIO 10 | TFT chip select |
 | CS-TF | GPIO 14 | SD card chip select |
 | OUT | GPIO 13 | SD MISO (a TFT nem használja) |
+| **BLK / LED+** | **GPIO 16** | Háttérvilágítás. 30 s tétlenség után LOW (idle screen-off), user-eseményre HIGH. A modul 3V3 → BLK hidat le kell venni |
 
 Az SPI órajel 10 MHz (mind a TFT, mind az SD oldalán) — a közös buszon óvatos
 érték, magasabb órajelen jelintegritási problémák lehetnek.

@@ -37,11 +37,17 @@ static const char *TAG = "ui";
 // -----------------------------------------------------------------------------
 static lv_display_t *s_disp = NULL;
 
-// Idle / energy management — 30 s után a panel DISPOFF, user-eseményre vissza.
-#define UI_IDLE_TIMEOUT_MS  30000
+// Idle / energy management — N másodperc után a panel DISPOFF, user-eseményre vissza.
+// A timeout dinamikus, a Settings képernyőről állítható.
+//   értékek (másodperc): 10, 15, 30, 0=never
+static int                    s_idle_timeout_s = 30;
 static esp_lcd_panel_handle_t s_panel = NULL;
 static int64_t                s_last_activity_us = 0;
 static bool                   s_disp_off = false;
+
+// Settings képernyő kurzor + edit állapot
+static int  s_set_cursor  = 0;     // melyik szerkeszthető elemen áll
+static bool s_set_editing = false; // épp módosítjuk-e
 
 typedef struct {
     // Screens
@@ -66,11 +72,12 @@ typedef struct {
     lv_obj_t *lib_list;
     lv_obj_t *lib_path;   // aktuális könyvtár fejléc
 
-    // Settings widgets
+    // Settings widgets — value labelek
     lv_obj_t *set_val_volume;
     lv_obj_t *set_val_battery;
-    lv_obj_t *set_val_tracks;
-    lv_obj_t *set_val_heap;
+    lv_obj_t *set_val_idle;
+    // Settings widgets — szerkeszthető sorok (kurzor + edit highlight ide kerül)
+    lv_obj_t *set_row[UI_SETTING_COUNT];   // [VOLUME], [IDLE_TIMEOUT]
 
     // Now Playing mini-lista adatai (a játszó album, player.c birtokolja)
     const track_t *lib_tracks;
@@ -101,7 +108,8 @@ static void update_screen_chip(void);
 static void browser_rebuild_list(void);
 static void browser_apply_cursor(void);
 static void update_mini_playlist(void);
-static void settings_refresh_heap(void);
+static void idle_label_refresh_locked(void);
+static void settings_render_cursor_locked(void);
 
 // -----------------------------------------------------------------------------
 // LCD bring-up + LVGL port — VÁLTOZATLAN a korábbi kódhoz képest
@@ -137,6 +145,17 @@ void ui_init(void)
     esp_lcd_panel_disp_on_off(panel, true);
     s_panel = panel;                                  // idle/wake-hez
     s_last_activity_us = esp_timer_get_time();
+
+    // Háttérvilágítás GPIO: bekapcsolva indít.
+    gpio_config_t bl_io = {
+        .pin_bit_mask = 1ULL << PIN_BL,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&bl_io);
+    gpio_set_level(PIN_BL, 1);
 
     // ---- LVGL port ----
     lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
@@ -346,7 +365,8 @@ static lv_obj_t *settings_row(lv_obj_t *parent, const char *icon, const char *la
 
     lv_obj_t *left = lv_label_create(row);
     char buf[64];
-    snprintf(buf, sizeof(buf), "%s  %s", icon, label);
+    if (icon && *icon) snprintf(buf, sizeof(buf), "%s  %s", icon, label);
+    else               snprintf(buf, sizeof(buf), "%s", label);
     lv_label_set_text(left, buf);
     lv_obj_set_style_text_color(left, COL_TEXT_DIM, 0);
 
@@ -367,15 +387,28 @@ static void build_settings(void)
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(panel, 4, LV_PART_MAIN);
 
-    settings_row(panel, LV_SYMBOL_VOLUME_MAX, "Volume",  &U.set_val_volume);
+    // Sorrend: fent a nem-szerkeszthetők, alul a szerkeszthetők (kurzor csak
+    // az utóbbiakon mozog). Egy blokk, vizuális szeparátor nélkül.
     settings_row(panel, LV_SYMBOL_BATTERY_FULL, "Battery", &U.set_val_battery);
-    settings_row(panel, LV_SYMBOL_AUDIO, "Tracks",  &U.set_val_tracks);
-    settings_row(panel, LV_SYMBOL_REFRESH, "Free heap", &U.set_val_heap);
 
-    lv_obj_t *hint = lv_label_create(panel);
-    lv_label_set_text(hint, "Menu long-press: rescan SD");
-    lv_obj_set_style_text_color(hint, COL_TEXT_DIM, 0);
-    lv_obj_set_style_pad_top(hint, 8, 0);
+    // Egy "info" sor — nincs value oldal, csak a szöveg balra.
+    {
+        lv_obj_t *info = lv_obj_create(panel);
+        lv_obj_remove_style_all(info);
+        lv_obj_set_size(info, lv_pct(100), LV_SIZE_CONTENT);
+        lv_obj_set_style_pad_ver(info, 2, LV_PART_MAIN);
+        lv_obj_t *lbl = lv_label_create(info);
+        lv_label_set_text(lbl, "HANNAMP3 2026");
+        lv_obj_set_style_text_color(lbl, COL_TEXT_DIM, 0);
+    }
+
+    U.set_row[UI_SETTING_VOLUME] =
+        settings_row(panel, LV_SYMBOL_VOLUME_MAX, "Volume",  &U.set_val_volume);
+    U.set_row[UI_SETTING_IDLE_TIMEOUT] =
+        settings_row(panel, NULL, "Display off", &U.set_val_idle);
+    if (U.set_val_idle) idle_label_refresh_locked();   // induló érték kiírása
+
+    settings_render_cursor_locked();   // induló kurzor a Volume-on
 }
 
 // -----------------------------------------------------------------------------
@@ -490,6 +523,12 @@ void ui_show_screen(ui_screen_t s)
     if (s >= UI_SCREEN_COUNT) return;
     lvgl_port_lock(0);
     U.current = s;
+    // Settings-ből kilépéskor az edit mód mindig kapcsolódjon ki, hogy ne
+    // legyen "ragadt" edit állapot a következő belépéskor.
+    if (s != UI_SCREEN_SETTINGS && s_set_editing) {
+        s_set_editing = false;
+        settings_render_cursor_locked();
+    }
     lv_screen_load(U.scr[s]);
     update_screen_chip();
     lvgl_port_unlock();
@@ -535,14 +574,6 @@ void ui_browser_set_cursor(int cursor)
     lvgl_port_unlock();
 }
 
-void ui_set_track_count(int count)
-{
-    lvgl_port_lock(0);
-    if (U.set_val_tracks) {
-        lv_label_set_text_fmt(U.set_val_tracks, "%d", count);
-    }
-    lvgl_port_unlock();
-}
 
 // --- A korábbi API ugyanazokkal a signature-ökkel -------------------------
 
@@ -602,6 +633,7 @@ bool ui_user_activity(void)
     if (s_disp_off && s_panel) {
         lvgl_port_lock(0);
         esp_lcd_panel_disp_on_off(s_panel, true);
+        gpio_set_level(PIN_BL, 1);   // háttérvilágítás vissza
         s_disp_off = false;
         lvgl_port_unlock();
         return true;     // ezzel a hívással ébresztettünk
@@ -612,13 +644,142 @@ bool ui_user_activity(void)
 void ui_idle_check(void)
 {
     if (s_disp_off || !s_panel) return;
+    if (s_idle_timeout_s <= 0) return;        // never
     int64_t elapsed_ms = (esp_timer_get_time() - s_last_activity_us) / 1000;
-    if (elapsed_ms >= UI_IDLE_TIMEOUT_MS) {
+    if (elapsed_ms >= (int64_t)s_idle_timeout_s * 1000) {
         lvgl_port_lock(0);
         esp_lcd_panel_disp_on_off(s_panel, false);
+        gpio_set_level(PIN_BL, 0);   // háttérvilágítás le — különben csak fekete kép
         s_disp_off = true;
         lvgl_port_unlock();
     }
+}
+
+// Belső: a Settings sor szöveg-frissítése (LVGL lockon belül hívható).
+static void idle_label_refresh_locked(void)
+{
+    if (!U.set_val_idle) return;
+    char buf[16];
+    if (s_idle_timeout_s <= 0) snprintf(buf, sizeof(buf), "Never");
+    else                       snprintf(buf, sizeof(buf), "%d s", s_idle_timeout_s);
+    lv_label_set_text(U.set_val_idle, buf);
+}
+
+void ui_set_idle_timeout_s(int seconds)
+{
+    s_idle_timeout_s = seconds;
+    s_last_activity_us = esp_timer_get_time();   // ne triggereljen azonnali off-ot
+    lvgl_port_lock(0);
+    idle_label_refresh_locked();
+    lvgl_port_unlock();
+}
+
+int ui_get_idle_timeout_s(void)
+{
+    return s_idle_timeout_s;
+}
+
+// Vol+/Vol- edit módban: dir > 0 → következő érték (10→15→30→Never), <= 0 → előző.
+int ui_cycle_idle_timeout(int dir)
+{
+    int next;
+    if (dir > 0) {
+        switch (s_idle_timeout_s) {
+            case 10: next = 15; break;
+            case 15: next = 30; break;
+            case 30: next = 0;  break;
+            default: next = 10; break;     // 0 (Never) → 10
+        }
+    } else {
+        switch (s_idle_timeout_s) {
+            case 10: next = 0;  break;     // 10 → Never
+            case 15: next = 10; break;
+            case 30: next = 15; break;
+            default: next = 30; break;     // 0 (Never) → 30
+        }
+    }
+    ui_set_idle_timeout_s(next);
+    return next;
+}
+
+// -----------------------------------------------------------------------------
+// Settings kurzor + edit rendering
+// -----------------------------------------------------------------------------
+// Egy sor három állapotban lehet:
+//   - sima:   nincs háttér, nincs border, pad_left 12 (állandó szöveg-pozíció)
+//   - kurzor: 3 px accent bal-csík + pad_left 9 (3 border + 9 = 12 belül,
+//             így a szöveg ugyanott marad mint kurzor nélkül; a csík és a
+//             szöveg közt ~9 px térköz)
+//   - edit:   teljes COL_ACCENT háttér, fekete szöveg — maximális kontraszt
+static void settings_render_cursor_locked(void)
+{
+    for (int i = 0; i < UI_SETTING_COUNT; i++) {
+        lv_obj_t *row = U.set_row[i];
+        if (!row) continue;
+        bool is_cursor = (i == s_set_cursor);
+        bool is_edit   = is_cursor && s_set_editing;
+
+        // A row első gyermeke a left label, második a value label.
+        lv_obj_t *left = lv_obj_get_child(row, 0);
+        lv_obj_t *val  = lv_obj_get_child(row, 1);
+
+        if (is_edit) {
+            lv_obj_set_style_bg_color(row, COL_ACCENT, 0);
+            lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
+            lv_obj_set_style_radius(row, 4, 0);
+            lv_obj_set_style_border_width(row, 0, 0);
+            lv_obj_set_style_pad_left(row, 12, 0);
+            lv_obj_set_style_pad_right(row, 12, 0);
+            if (left) lv_obj_set_style_text_color(left, COL_BG, 0);
+            if (val)  lv_obj_set_style_text_color(val,  COL_BG, 0);
+        } else if (is_cursor) {
+            lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_color(row, COL_ACCENT, 0);
+            lv_obj_set_style_border_width(row, 3, 0);
+            lv_obj_set_style_border_side(row, LV_BORDER_SIDE_LEFT, 0);
+            lv_obj_set_style_radius(row, 4, 0);
+            lv_obj_set_style_pad_left(row, 9, 0);   // 3 + 9 = 12 a tartalomig
+            lv_obj_set_style_pad_right(row, 0, 0);
+            if (left) lv_obj_set_style_text_color(left, COL_TEXT_DIM, 0);
+            if (val)  lv_obj_set_style_text_color(val,  COL_TEXT, 0);
+        } else {
+            lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+            lv_obj_set_style_border_width(row, 0, 0);
+            lv_obj_set_style_pad_left(row, 12, 0);
+            lv_obj_set_style_pad_right(row, 0, 0);
+            if (left) lv_obj_set_style_text_color(left, COL_TEXT_DIM, 0);
+            if (val)  lv_obj_set_style_text_color(val,  COL_TEXT, 0);
+        }
+    }
+}
+
+void ui_settings_move_cursor(int delta)
+{
+    if (s_set_editing) return;
+    int n = (int)UI_SETTING_COUNT;
+    s_set_cursor = ((s_set_cursor + delta) % n + n) % n;
+    lvgl_port_lock(0);
+    settings_render_cursor_locked();
+    lvgl_port_unlock();
+}
+
+bool ui_settings_is_editing(void)
+{
+    return s_set_editing;
+}
+
+void ui_settings_set_editing(bool on)
+{
+    if (s_set_editing == on) return;
+    s_set_editing = on;
+    lvgl_port_lock(0);
+    settings_render_cursor_locked();
+    lvgl_port_unlock();
+}
+
+ui_setting_t ui_settings_get_cursor(void)
+{
+    return (ui_setting_t)s_set_cursor;
 }
 
 static void fmt_mmss(uint32_t ms, char *buf, int n)
@@ -640,8 +801,6 @@ void ui_set_progress(uint32_t pos_ms, uint32_t dur_ms)
         snprintf(line, sizeof(line), "%s / %s", a, b);
         lv_label_set_text(U.np_lbl_time, line);
     }
-    // Periodikusan frissítjük a heap kijelzőt is a settings képernyőn.
-    if (U.current == UI_SCREEN_SETTINGS) settings_refresh_heap();
     lvgl_port_unlock();
 }
 
@@ -690,15 +849,3 @@ void ui_set_playlist(const track_t *tracks, int count, int current_idx)
 void ui_spi_lock(void)   { lvgl_port_lock(0); }
 void ui_spi_unlock(void) { lvgl_port_unlock(); }
 
-// -----------------------------------------------------------------------------
-// Internal: settings heap frissítés (csak SETTINGS képernyőn érdekes)
-// -----------------------------------------------------------------------------
-static void settings_refresh_heap(void)
-{
-    if (!U.set_val_heap) return;
-    size_t internal = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
-    size_t psram    = heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    lv_label_set_text_fmt(U.set_val_heap, "%lu / %lu k",
-                          (unsigned long)(internal / 1024),
-                          (unsigned long)(psram / 1024));
-}
