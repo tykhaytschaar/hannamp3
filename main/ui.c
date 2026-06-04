@@ -83,6 +83,7 @@ typedef struct {
     // Persistent overlay (battery + screen chip rendered on lv_layer_top)
     lv_obj_t *ovr_screen_chip;
     lv_obj_t *ovr_battery;
+    lv_obj_t *ovr_volume;   // hangerő chip a battery előtt (minden képernyőn)
     lv_obj_t *ovr_lock;     // lakat ikon (closed=lock / open=unlocked)
 
     // Now Playing widgets
@@ -405,6 +406,13 @@ static void build_overlay(void)
     lv_obj_set_style_text_color(U.ovr_battery, COL_TEXT_DIM, LV_PART_MAIN);
     lv_label_set_text(U.ovr_battery, LV_SYMBOL_BATTERY_FULL " ---");
     lv_obj_align(U.ovr_battery, LV_ALIGN_TOP_RIGHT, -8, 6);
+
+    // Hangerő chip a battery előtt (balra). align_to dinamikusan a battery
+    // bal széléhez igazítja, így a battery szövegszélességtől függetlenül jó.
+    U.ovr_volume = lv_label_create(top);
+    lv_obj_set_style_text_color(U.ovr_volume, COL_TEXT, LV_PART_MAIN);
+    lv_label_set_text(U.ovr_volume, LV_SYMBOL_VOLUME_MAX " ---");
+    lv_obj_align_to(U.ovr_volume, U.ovr_battery, LV_ALIGN_OUT_LEFT_MID, -14, 0);
 
     // Lakat ikon a center-top-on. Default: open () — io_init beolvassa
     // a switch valódi állapotát és frissíti, ha kell.
@@ -1091,8 +1099,12 @@ void ui_set_volume(uint8_t vol)
                       (vol < 33)  ? LV_SYMBOL_VOLUME_MID :
                                     LV_SYMBOL_VOLUME_MAX;
     snprintf(s, sizeof(s), "%s %u%%", sym, vol);
+    if (U.ovr_volume)     lv_label_set_text(U.ovr_volume, s);   // header chip
     if (U.np_lbl_volume)  lv_label_set_text(U.np_lbl_volume, s);
     if (U.set_val_volume) lv_label_set_text_fmt(U.set_val_volume, "%u%%", vol);
+    // A header chip pozíciója a battery szélességéhez igazodik (változhat a %).
+    if (U.ovr_volume && U.ovr_battery)
+        lv_obj_align_to(U.ovr_volume, U.ovr_battery, LV_ALIGN_OUT_LEFT_MID, -14, 0);
     lvgl_port_unlock();
 }
 
