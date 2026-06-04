@@ -178,6 +178,34 @@ static void browser_activate(void)
     ui_show_screen(UI_SCREEN_NOW_PLAYING);
 }
 
+void player_do_action(player_action_t a)
+{
+    switch (a) {
+    case PLAYER_ACTION_PREV:       player_handle_button(BTN_EVT_PREV);       break;
+    case PLAYER_ACTION_PLAY_PAUSE: player_handle_button(BTN_EVT_PLAY_PAUSE); break;
+    case PLAYER_ACTION_NEXT:       player_handle_button(BTN_EVT_NEXT);       break;
+    case PLAYER_ACTION_STOP:
+        if (ui_user_activity()) return;     // alvó kijelző: a tap csak ébreszt
+        audio_stop();
+        ui_set_state(AUDIO_STATE_STOPPED);
+        ui_set_progress(0, 0);
+        break;
+    }
+}
+
+void player_play_index(int idx)
+{
+    if (ui_user_activity()) return;         // alvó kijelző: a tap csak ébreszt
+    if (idx < 0 || idx >= s_count) return;
+    if (idx == s_idx) {
+        audio_status_t st;
+        audio_get_status(&st);
+        if (st.state == AUDIO_STATE_PLAYING) return;   // már ezt játssza → no-op
+    }
+    s_idx = idx;
+    play_current();
+}
+
 void player_handle_button(btn_event_t evt)
 {
     // Lock tolókapcsoló LOW: minden gombnyomást eldobunk (kivéve magát a

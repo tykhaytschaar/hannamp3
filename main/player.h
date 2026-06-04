@@ -14,3 +14,17 @@ void player_handle_button(btn_event_t evt);
 // Háttérvilágítás fényerő (0–100%): alkalmazza (LEDC PWM) és NVS-be menti.
 // A Settings-edit és a CLI `bl` parancs is ezt hívja → perzisztens.
 void player_set_backlight(uint8_t pct);
+
+// Now Playing transport gombok (touch). A 4 akció a fizikai gombok útjára
+// képződik le; a STOP új (audio_stop + UI reset). Alvó kijelzőn csak ébreszt.
+typedef enum {
+    PLAYER_ACTION_PREV,
+    PLAYER_ACTION_PLAY_PAUSE,
+    PLAYER_ACTION_STOP,
+    PLAYER_ACTION_NEXT,
+} player_action_t;
+void player_do_action(player_action_t a);
+
+// Egy track lejátszása album-indexszel (Now Playing track-lista tap). Ha az
+// idx már a játszó track és megy → no-op. Alvó kijelzőn csak ébreszt.
+void player_play_index(int idx);

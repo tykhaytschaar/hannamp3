@@ -21,6 +21,7 @@
 
 #include "app_config.h"
 #include "ui.h"
+#include "player.h"   // player_do_action / player_play_index (touch transport)
 #include "mp3_fonts.h"
 
 static const char *TAG = "ui";
@@ -92,8 +93,7 @@ typedef struct {
     lv_obj_t *np_lbl_subtitle;
     lv_obj_t *np_lbl_time;
     lv_obj_t *np_bar_progress;
-    lv_obj_t *np_lbl_state;
-    lv_obj_t *np_lbl_volume;
+    lv_obj_t *np_btn_pp_lbl;   // play/pause transport gomb ikon-labelje
     lv_obj_t *np_mini_list;
 
     // Library (fájlböngésző) widgetek
@@ -429,6 +429,34 @@ static void update_screen_chip(void)
     lv_label_set_text(U.ovr_screen_chip, labels[U.current]);
 }
 
+// Transport gomb tap → a megfelelő player akció (user_data = player_action_t).
+static void np_transport_click(lv_event_t *e)
+{
+    int action = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target_obj(e));
+    player_do_action((player_action_t)action);
+}
+
+// Egy 64×48 transport gomb létrehozása ikon-labellel. Visszaadja a labelt
+// (a play/pause gombnál ezt eltároljuk, hogy az ikon state szerint váltson).
+static lv_obj_t *transport_btn(lv_obj_t *parent, const char *icon,
+                               player_action_t action, bool accent)
+{
+    lv_obj_t *btn = lv_button_create(parent);
+    lv_obj_set_size(btn, 64, 48);
+    lv_obj_set_style_radius(btn, 8, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(btn, accent ? COL_ACCENT : COL_BG_PANEL_2, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_user_data(btn, (void *)(intptr_t)action);
+    lv_obj_add_event_cb(btn, np_transport_click, LV_EVENT_CLICKED, NULL);
+
+    lv_obj_t *lbl = lv_label_create(btn);
+    lv_obj_set_style_text_font(lbl, &mp3_inter_18, 0);
+    lv_obj_set_style_text_color(lbl, accent ? COL_BG : COL_TEXT, 0);
+    lv_label_set_text(lbl, icon);
+    lv_obj_center(lbl);
+    return lbl;
+}
+
 // -----------------------------------------------------------------------------
 // Screen 1: Now Playing
 // Layout 480×320:
@@ -469,7 +497,7 @@ static void build_now_playing(void)
 
     U.np_bar_progress = lv_bar_create(scr);
     lv_obj_set_size(U.np_bar_progress, 284, 8);
-    lv_obj_align(U.np_bar_progress, LV_ALIGN_TOP_LEFT, 184, 124);
+    lv_obj_align(U.np_bar_progress, LV_ALIGN_TOP_LEFT, 184, 104);
     lv_bar_set_range(U.np_bar_progress, 0, 1000);
     lv_bar_set_value(U.np_bar_progress, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(U.np_bar_progress, COL_BG_PANEL_2, LV_PART_MAIN);
@@ -478,19 +506,24 @@ static void build_now_playing(void)
     lv_obj_set_style_radius(U.np_bar_progress, 4, LV_PART_INDICATOR);
 
     U.np_lbl_time = lv_label_create(scr);
-    lv_obj_align(U.np_lbl_time, LV_ALIGN_TOP_LEFT, 184, 140);
+    lv_obj_align(U.np_lbl_time, LV_ALIGN_TOP_LEFT, 184, 116);
     lv_obj_set_style_text_color(U.np_lbl_time, COL_TEXT_DIM, 0);
     lv_label_set_text(U.np_lbl_time, "0:00 / 0:00");
 
-    U.np_lbl_state = lv_label_create(scr);
-    lv_obj_align(U.np_lbl_state, LV_ALIGN_TOP_LEFT, 184, 168);
-    lv_obj_set_style_text_color(U.np_lbl_state, COL_ACCENT, 0);
-    lv_label_set_text(U.np_lbl_state, LV_SYMBOL_STOP);   // boot-kor idle
-
-    U.np_lbl_volume = lv_label_create(scr);
-    lv_obj_align(U.np_lbl_volume, LV_ALIGN_TOP_LEFT, 216, 168);
-    lv_obj_set_style_text_color(U.np_lbl_volume, COL_TEXT, 0);
-    lv_label_set_text(U.np_lbl_volume, LV_SYMBOL_VOLUME_MAX " 70%");
+    // Transport sor: prev / play-pause / stop / next (4 × 64×48), y=140..188.
+    // A play/pause kitöltött accent; a többi tompa panel-bg. A volume + state
+    // ikon a headerbe / a play-pause gombra került (np_lbl_state megszűnt).
+    lv_obj_t *trow = lv_obj_create(scr);
+    lv_obj_remove_style_all(trow);
+    lv_obj_set_size(trow, 284, 48);
+    lv_obj_align(trow, LV_ALIGN_TOP_LEFT, 184, 140);
+    lv_obj_set_flex_flow(trow, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(trow, LV_FLEX_ALIGN_SPACE_BETWEEN,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    transport_btn(trow, LV_SYMBOL_PREV, PLAYER_ACTION_PREV, false);
+    U.np_btn_pp_lbl = transport_btn(trow, LV_SYMBOL_PLAY, PLAYER_ACTION_PLAY_PAUSE, true);
+    transport_btn(trow, LV_SYMBOL_STOP, PLAYER_ACTION_STOP, false);
+    transport_btn(trow, LV_SYMBOL_NEXT, PLAYER_ACTION_NEXT, false);
 
     // Mini playlist (alul, 4 sor)
     U.np_mini_list = make_panel(scr);
@@ -823,14 +856,11 @@ void ui_show_no_track(void)
 void ui_set_state(audio_state_t st)
 {
     lvgl_port_lock(0);
-    if (U.np_lbl_state) {
-        const char *sym;
-        switch (st) {
-            case AUDIO_STATE_PLAYING: sym = LV_SYMBOL_PLAY;  break;
-            case AUDIO_STATE_PAUSED:  sym = LV_SYMBOL_PAUSE; break;
-            default:                  sym = LV_SYMBOL_STOP;  break;  // STOPPED, FINISHED
-        }
-        lv_label_set_text(U.np_lbl_state, sym);
+    // A play/pause transport gomb az AKCIÓT mutatja: ha játszik → PAUSE ikon
+    // (tap = pause), egyébként → PLAY ikon (tap = play).
+    if (U.np_btn_pp_lbl) {
+        lv_label_set_text(U.np_btn_pp_lbl,
+                          (st == AUDIO_STATE_PLAYING) ? LV_SYMBOL_PAUSE : LV_SYMBOL_PLAY);
     }
     lvgl_port_unlock();
 }
@@ -1100,7 +1130,6 @@ void ui_set_volume(uint8_t vol)
                                     LV_SYMBOL_VOLUME_MAX;
     snprintf(s, sizeof(s), "%s %u%%", sym, vol);
     if (U.ovr_volume)     lv_label_set_text(U.ovr_volume, s);   // header chip
-    if (U.np_lbl_volume)  lv_label_set_text(U.np_lbl_volume, s);
     if (U.set_val_volume) lv_label_set_text_fmt(U.set_val_volume, "%u%%", vol);
     // A header chip pozíciója a battery szélességéhez igazodik (változhat a %).
     if (U.ovr_volume && U.ovr_battery)
