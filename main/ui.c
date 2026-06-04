@@ -127,6 +127,7 @@ static char s_cover_path[MAX_PATH_LEN];
 // Forward declarations
 // -----------------------------------------------------------------------------
 static void ui_touch_init(void);
+static void screen_gesture_cb(lv_event_t *e);
 static void build_overlay(void);
 static void build_now_playing(void);
 static void build_library(void);
@@ -318,10 +319,34 @@ static void ui_touch_init(void)
 
     for (int i = 0; i < UI_SCREEN_COUNT; i++) {
         lv_obj_add_event_cb(U.scr[i], touch_log_event_cb, LV_EVENT_PRESSED, NULL);
+        // Swipe gesture: bal/jobb húzás váltogatja a képernyőket (a MENU
+        // gomb short press-ét helyettesíti). A gesture esemény a screen-en
+        // sül el, akkor is ha a touch egy belső widget (pl. lib_list)
+        // területén kezdődött — LVGL a domináns irányt nézi.
+        lv_obj_add_event_cb(U.scr[i], screen_gesture_cb, LV_EVENT_GESTURE, NULL);
     }
     lvgl_port_unlock();
 
-    ESP_LOGI(TAG, "touch ready — bal-felső ~(0,0), jobb-alsó ~(480,320)");
+    ESP_LOGI(TAG, "touch ready — bal-felső ~(0,0), jobb-alsó ~(480,320). Swipe: ←/→ képernyőváltás.");
+}
+
+// -----------------------------------------------------------------------------
+// Swipe gesture → képernyőváltás (a MENU gomb short press-ét helyettesíti)
+// LV_DIR_LEFT  : ujj balra húzott → következő képernyő
+// LV_DIR_RIGHT : ujj jobbra húzott → előző képernyő
+// Fel/le gesture ignorálva — azt a lib_list scroll használja.
+// -----------------------------------------------------------------------------
+static void screen_gesture_cb(lv_event_t *e)
+{
+    (void)e;
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    lv_dir_t dir = lv_indev_get_gesture_dir(indev);
+    if (dir == LV_DIR_LEFT) {
+        ui_next_screen();
+    } else if (dir == LV_DIR_RIGHT) {
+        ui_prev_screen();
+    }
 }
 
 // -----------------------------------------------------------------------------
@@ -336,6 +361,10 @@ static void apply_screen_bg(lv_obj_t *scr)
     // Default font az egész screen-en — minden label örökli, kivéve ahol
     // explicit font van beállítva (title 24, subtitle 18).
     lv_obj_set_style_text_font(scr, &mp3_inter_14, LV_PART_MAIN);
+    // A screen ne scrollozzon — különben a vízszintes touch swipe-ot a
+    // scroll-engine fogja el, és nem érne el a LV_EVENT_GESTURE-höz.
+    // A lib_list és más belső scrollozható widgetek ettől függetlenek.
+    lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 }
 
 static lv_obj_t *make_panel(lv_obj_t *parent)
@@ -692,6 +721,12 @@ void ui_next_screen(void)
 {
     ui_screen_t n = (ui_screen_t)((U.current + 1) % UI_SCREEN_COUNT);
     ui_show_screen(n);
+}
+
+void ui_prev_screen(void)
+{
+    ui_screen_t p = (ui_screen_t)((U.current + UI_SCREEN_COUNT - 1) % UI_SCREEN_COUNT);
+    ui_show_screen(p);
 }
 
 ui_screen_t ui_current_screen(void)

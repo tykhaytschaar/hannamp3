@@ -37,7 +37,11 @@ void sd_init(void)
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SD_SPI_HOST;
-    host.max_freq_khz = 5000;    // 5 MHz — diagnosztikai mód
+    // 5 MHz: a dupont-bekötés SD-SPI olvasásnál (MISO-mintavételezés) csak
+    // ennyit bír megbízhatóan — 20/40 MHz CRC-error / mount-fail. A boot-splash
+    // sávszélét NEM az SD-órajel emelésével oldjuk (az a kártyát megbízhatatlanná
+    // teszi), hanem a frame-adat csökkentésével (lásd splash formátum).
+    host.max_freq_khz = 5000;    // 5 MHz
 
     sdspi_device_config_t slot_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_cfg.gpio_cs = PIN_SD_CS;

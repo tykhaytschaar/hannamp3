@@ -43,11 +43,15 @@ void ui_spi_unlock(void);
 // Multi-screen API — Now Playing / Library / Settings
 // -----------------------------------------------------------------------------
 //
-// A MENU gomb (rövid nyomás) a player.c-ben ui_next_screen()-t hív, ami
-// ciklikusan vált a három képernyő között. A Library képernyőn a
-// NEXT/PREV gombok a teljes lista cursorát mozgatják, és a PLAY gomb a
-// kiválasztott elemet indítja el — a player.c ezt a két helper-rel intézi:
-// ui_library_move_cursor() és ui_library_get_selected_index().
+// A három képernyő közti váltás touch swipe-pal történik:
+//   - swipe left  → ui_next_screen()  (Now → Library → Settings → Now)
+//   - swipe right → ui_prev_screen()
+// A MENU gomb short press már nem cikláltatja a képernyőket (csak a long
+// press maradt = SD rescan a player.c-ben).
+//
+// A Library képernyőn a NEXT/PREV gombok a teljes lista cursorát mozgatják,
+// és a PLAY gomb a kiválasztott elemet indítja el — a player.c ezt a két
+// helper-rel intézi: ui_browser_set_cursor() és (külön) a kiválasztás.
 //
 // Minden ui_* hívás belép az LVGL mutexbe, ahogy eddig is.
 
@@ -60,6 +64,7 @@ typedef enum {
 
 void        ui_show_screen(ui_screen_t s);
 void        ui_next_screen(void);
+void        ui_prev_screen(void);
 ui_screen_t ui_current_screen(void);
 
 // Library = fájlböngésző. A player.c birtokolja a navigációs állapotot

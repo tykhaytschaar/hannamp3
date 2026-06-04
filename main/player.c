@@ -248,8 +248,9 @@ void player_handle_button(btn_event_t evt)
     }
 
     case BTN_EVT_MENU:
-        // Rövid nyomás: ciklikus screen váltás.
-        ui_next_screen();
+        // Rövid nyomás: nincs funkció — a képernyőváltás touch swipe-ra
+        // került (lásd ui.c screen_gesture_cb). A MENU button csak long
+        // press-re reagál (lásd alább).
         break;
 
     case BTN_EVT_MENU_LONG:
