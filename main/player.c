@@ -72,6 +72,17 @@ static bool persist_get_i32(const char *key, int32_t *out)
     return e == ESP_OK;
 }
 
+// Háttérvilágítás fényerő: alkalmazás (LEDC PWM az ui.c-ben) + azonnali
+// NVS-mentés. A Settings-edit és a CLI `bl` parancs is ezt hívja, így a
+// beállítás forrástól függetlenül perzisztens. Boot-kor a player_start
+// olvassa vissza és állítja be (mentés nélkül).
+void player_set_backlight(uint8_t pct)
+{
+    if (pct > 100) pct = 100;
+    ui_set_backlight(pct);
+    persist_set_i32("bl_pct", (int32_t)pct);
+}
+
 static void browser_refresh(void)
 {
     persist_set_str("br_dir", s_bpath);   // jegyezzük meg a böngészett könyvtárat
@@ -268,6 +279,14 @@ void player_handle_button(btn_event_t evt)
                     ui_set_volume(v);
                     break;
                 }
+                case UI_SETTING_BACKLIGHT: {
+                    // Fényerő ±10% lépés, alkalmazás + azonnali NVS-mentés.
+                    int v = ui_get_backlight();
+                    if (dir > 0) v = (v + 10 > 100) ? 100 : v + 10;
+                    else         v = (v < 10)       ? 0   : v - 10;
+                    player_set_backlight((uint8_t)v);
+                    break;
+                }
                 case UI_SETTING_IDLE_TIMEOUT: {
                     // Érték állítás + azonnali NVS-mentés (no PLAY-to-save).
                     int v = ui_cycle_idle_timeout(dir);
@@ -396,6 +415,14 @@ void player_start(void)
     int32_t saved_sleep_en = 0;
     persist_get_i32("sleep_en", &saved_sleep_en);
     ui_set_sleep_enabled(saved_sleep_en != 0);
+
+    // Háttérvilágítás fényerő visszaolvasása (default 100%). Csak beállítjuk
+    // (nem mentjük újra); a tényleges felkapcsolás az ui_display_ready-ben.
+    int32_t saved_bl = 100;
+    if (persist_get_i32("bl_pct", &saved_bl)) {
+        if (saved_bl < 0 || saved_bl > 100) saved_bl = 100;
+    }
+    ui_set_backlight((uint8_t)saved_bl);
 
     // Böngésző: ha van mentett könyvtár és még létezik, oda térünk vissza,
     // különben az SD gyökeréből indulunk.

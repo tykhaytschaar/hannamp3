@@ -10,3 +10,7 @@ void player_start(void);
 
 // Egy button event-et lekezel: ezt hívja a gomb-callback és a CLI is.
 void player_handle_button(btn_event_t evt);
+
+// Háttérvilágítás fényerő (0–100%): alkalmazza (LEDC PWM) és NVS-be menti.
+// A Settings-edit és a CLI `bl` parancs is ezt hívja → perzisztens.
+void player_set_backlight(uint8_t pct);

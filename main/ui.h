@@ -4,8 +4,13 @@
 #include <stdbool.h>
 #include "sd.h"
 
-// LVGL + ST7789 init.
+// LVGL + ST7796 init. A háttérvilágítás boot alatt OFF marad.
 void ui_init(void);
+
+// A teljes init után (player_start lefutott, tartalom betöltve) hívd: a UI-t
+// azonnal kirajzoltatja, megvárja a flush-t, majd felkapcsolja a
+// háttérvilágítást — így a boot-kori fehér flash + üres fázis nem látszik.
+void ui_display_ready(void);
 
 // LVGL-safe wrapper: a hívás belép az LVGL mutexbe, beállítja a UI-t,
 // majd elenged.
@@ -17,6 +22,12 @@ void ui_show_no_track(void);
 void ui_set_state(audio_state_t st);
 void ui_set_progress(uint32_t pos_ms, uint32_t dur_ms);
 void ui_set_volume(uint8_t vol);
+
+// Háttérvilágítás fényereje százalékban (0–100), LEDC PWM-en. 0 = sötét,
+// 100 = teljes. A beállított érték idle/sleep alatt megmarad, ébredéskor
+// visszaáll. Boot: 100%.
+void    ui_set_backlight(uint8_t pct);
+uint8_t ui_get_backlight(void);
 void ui_set_battery(uint16_t mv, uint8_t percent);
 
 // Egyszerű playlist navigáció (cursor highlight)
@@ -103,6 +114,7 @@ int  ui_cycle_idle_timeout(int dir);
 // -----------------------------------------------------------------------------
 typedef enum {
     UI_SETTING_VOLUME = 0,
+    UI_SETTING_BACKLIGHT,
     UI_SETTING_IDLE_TIMEOUT,
     UI_SETTING_SLEEP,
     UI_SETTING_COUNT

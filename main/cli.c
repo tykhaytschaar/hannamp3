@@ -26,6 +26,13 @@ static void set_volume(uint8_t v)
     ui_set_volume(v);
 }
 
+static void set_backlight(int v)
+{
+    if (v < 0)   v = 0;
+    if (v > 100) v = 100;
+    player_set_backlight((uint8_t)v);   // alkalmaz + NVS-be ment
+}
+
 // Egy parancs lekezelése: `cmd` a `#` és `$` (vagy `#`) közti rész,
 // `param` a `$` és záró `#` közti rész (üres lehet).
 static void cli_dispatch(const char *cmd, const char *param)
@@ -84,6 +91,27 @@ static void cli_dispatch(const char *cmd, const char *param)
             set_volume((uint8_t)v);
         } else {
             ESP_LOGW(TAG, "vol: unknown param '%s' (use up/down/max/off/0-100)", param);
+        }
+    } else if (strcmp(cmd, "bl") == 0) {
+        int cur = ui_get_backlight();
+        if (strcmp(param, "up") == 0) {
+            set_backlight(cur + 10);
+            ESP_LOGI(TAG, "bl up -> %d%%", ui_get_backlight());
+        } else if (strcmp(param, "down") == 0) {
+            set_backlight(cur - 10);
+            ESP_LOGI(TAG, "bl down -> %d%%", ui_get_backlight());
+        } else if (strcmp(param, "max") == 0) {
+            ESP_LOGI(TAG, "bl max");
+            set_backlight(100);
+        } else if (strcmp(param, "off") == 0) {
+            ESP_LOGI(TAG, "bl off");
+            set_backlight(0);
+        } else if (param[0] >= '0' && param[0] <= '9') {
+            int v = atoi(param);
+            ESP_LOGI(TAG, "bl %d%%", v);
+            set_backlight(v);
+        } else {
+            ESP_LOGW(TAG, "bl: unknown param '%s' (use up/down/max/off/0-100)", param);
         }
     } else {
         ESP_LOGW(TAG, "unknown command: '%s'", cmd);

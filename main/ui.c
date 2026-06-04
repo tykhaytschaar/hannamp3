@@ -12,6 +12,7 @@
 #include "esp_lcd_st7796.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
+#include "driver/ledc.h"
 
 #include "lvgl.h"
 #include "esp_lvgl_port.h"
@@ -44,7 +45,24 @@ static lv_display_t *s_disp = NULL;
 static int                    s_idle_timeout_s = 30;
 static esp_lcd_panel_handle_t s_panel = NULL;
 static int64_t                s_last_activity_us = 0;
-static bool                   s_disp_off = false;
+// Boot: a kijelző logikailag "off" (a backlight duty 0), így a player_start
+// mentett-fényerő visszaállítása csak tárol — a tényleges felkapcsolás az
+// ui_display_ready-ben történik, a tartalom betöltése után.
+static bool                   s_disp_off = true;
+
+// Háttérvilágítás PWM (LEDC). A GPIO 16-ot duty-val hajtjuk: 0 = sötét,
+// max = teljes fényerő. A beállított fényerő százalékban (boot: 100%);
+// idle/boot alatt a tényleges duty 0, de s_bl_percent megmarad.
+#define BL_LEDC_MODE      LEDC_LOW_SPEED_MODE   // ESP32-S3: csak low-speed
+#define BL_LEDC_TIMER     LEDC_TIMER_0
+#define BL_LEDC_CHANNEL   LEDC_CHANNEL_0
+#define BL_LEDC_RES       LEDC_TIMER_10_BIT     // 1024 lépés — bőven elég
+#define BL_LEDC_RES_BITS  10
+#define BL_LEDC_FREQ_HZ   20000                 // 20 kHz: villódzás- és zajmentes
+#define BL_PCT_DEFAULT    100
+static uint8_t s_bl_percent = BL_PCT_DEFAULT;
+
+static void backlight_apply(void);
 
 // Settings képernyő kurzor + edit állapot
 static int  s_set_cursor  = 0;     // melyik szerkeszthető elemen áll
@@ -80,6 +98,7 @@ typedef struct {
 
     // Settings widgets — value labelek
     lv_obj_t *set_val_volume;
+    lv_obj_t *set_val_backlight;
     lv_obj_t *set_val_battery;
     lv_obj_t *set_val_idle;
     lv_obj_t *set_val_sleep;
@@ -157,16 +176,26 @@ void ui_init(void)
     s_panel = panel;                                  // idle/wake-hez
     s_last_activity_us = esp_timer_get_time();
 
-    // Háttérvilágítás GPIO: bekapcsolva indít.
-    gpio_config_t bl_io = {
-        .pin_bit_mask = 1ULL << PIN_BL,
-        .mode = GPIO_MODE_OUTPUT,
-        .pull_up_en = GPIO_PULLUP_DISABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
+    // Háttérvilágítás PWM (LEDC) a GPIO 16-on. Boot alatt duty 0 (OFF) marad —
+    // hogy a panel power-on fehér flash-e és az adat-nélküli placeholder fázis
+    // ne látsszon — az ui_display_ready() rámpázza a beállított fényerőre.
+    ledc_timer_config_t bl_timer = {
+        .speed_mode      = BL_LEDC_MODE,
+        .timer_num       = BL_LEDC_TIMER,
+        .duty_resolution = BL_LEDC_RES,
+        .freq_hz         = BL_LEDC_FREQ_HZ,
+        .clk_cfg         = LEDC_AUTO_CLK,
     };
-    gpio_config(&bl_io);
-    gpio_set_level(PIN_BL, 1);
+    ESP_ERROR_CHECK(ledc_timer_config(&bl_timer));
+    ledc_channel_config_t bl_ch = {
+        .gpio_num   = PIN_BL,
+        .speed_mode = BL_LEDC_MODE,
+        .channel    = BL_LEDC_CHANNEL,
+        .timer_sel  = BL_LEDC_TIMER,
+        .duty       = 0,            // boot: OFF
+        .hpoint     = 0,
+    };
+    ESP_ERROR_CHECK(ledc_channel_config(&bl_ch));
 
     // ---- LVGL port ----
     lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
@@ -432,10 +461,13 @@ static void build_settings(void)
 
     U.set_row[UI_SETTING_VOLUME] =
         settings_row(panel, LV_SYMBOL_VOLUME_MAX, "Volume",  &U.set_val_volume);
+    U.set_row[UI_SETTING_BACKLIGHT] =
+        settings_row(panel, NULL, "Brightness", &U.set_val_backlight);
     U.set_row[UI_SETTING_IDLE_TIMEOUT] =
         settings_row(panel, NULL, "Display off", &U.set_val_idle);
     U.set_row[UI_SETTING_SLEEP] =
         settings_row(panel, NULL, "Sleep", &U.set_val_sleep);
+    if (U.set_val_backlight) lv_label_set_text_fmt(U.set_val_backlight, "%u%%", s_bl_percent);
     if (U.set_val_idle)  idle_label_refresh_locked();   // induló érték kiírása
     if (U.set_val_sleep) lv_label_set_text(U.set_val_sleep, s_sleep_enabled ? "On" : "Off");
 
@@ -676,14 +708,56 @@ void ui_set_state(audio_state_t st)
     lvgl_port_unlock();
 }
 
+// A LEDC duty beállítása az aktuális állapot szerint: ha a kijelző idle/boot
+// miatt le van kapcsolva (s_disp_off), a duty 0; különben a beállított %.
+static void backlight_apply(void)
+{
+    uint32_t max  = (1u << BL_LEDC_RES_BITS) - 1u;
+    uint32_t duty = s_disp_off ? 0u : (max * s_bl_percent) / 100u;
+    ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, duty);
+    ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL);
+}
+
+void ui_display_ready(void)
+{
+    // A boot alatt a backlight végig OFF volt (lásd ui_init + main.c). Ekkorra
+    // a player_start betöltötte a valódi tartalmat — kirajzoltatjuk azonnal,
+    // megvárjuk a flush DMA kifutását, és csak ezután kapcsoljuk fel a
+    // háttérvilágítást, így a fehér flash + üres placeholder fázis rejtve marad.
+    if (s_disp && lvgl_port_lock(200)) {
+        lv_refr_now(s_disp);
+        lvgl_port_unlock();
+    }
+    // A teljes 480×320 flush ~31 ms @ 80 MHz; 50 ms bőven fedi a DMA kifutását.
+    vTaskDelay(pdMS_TO_TICKS(50));
+    s_disp_off = false;
+    backlight_apply();                           // a beállított fényerőre
+    s_last_activity_us = esp_timer_get_time();   // idle-számláló nullázása
+}
+
+void ui_set_backlight(uint8_t pct)
+{
+    if (pct > 100) pct = 100;
+    lvgl_port_lock(0);
+    s_bl_percent = pct;
+    if (!s_disp_off) backlight_apply();   // ha alszik a kijelző, csak tároljuk
+    if (U.set_val_backlight) lv_label_set_text_fmt(U.set_val_backlight, "%u%%", pct);
+    lvgl_port_unlock();
+}
+
+uint8_t ui_get_backlight(void)
+{
+    return s_bl_percent;
+}
+
 bool ui_user_activity(void)
 {
     s_last_activity_us = esp_timer_get_time();
     if (s_disp_off && s_panel) {
         lvgl_port_lock(0);
         esp_lcd_panel_disp_on_off(s_panel, true);
-        gpio_set_level(PIN_BL, 1);   // háttérvilágítás vissza
         s_disp_off = false;
+        backlight_apply();           // vissza a beállított fényerőre
         lvgl_port_unlock();
         return true;     // ezzel a hívással ébresztettünk
     }
@@ -707,8 +781,8 @@ void ui_idle_check(void)
     if (elapsed_ms >= (int64_t)s_idle_timeout_s * 1000) {
         lvgl_port_lock(0);
         esp_lcd_panel_disp_on_off(s_panel, false);
-        gpio_set_level(PIN_BL, 0);   // háttérvilágítás le — különben csak fekete kép
         s_disp_off = true;
+        backlight_apply();           // duty 0 — háttérvilágítás le
         lvgl_port_unlock();
     }
 }

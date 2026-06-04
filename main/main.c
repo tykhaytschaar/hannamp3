@@ -34,6 +34,22 @@ static void pre_init_cs_pins(void)
     gpio_set_level(PIN_SD_CS, 1);
 }
 
+// Háttérvilágítás már a legkorábbi ponton OFF. A panel power-on fehér
+// flash-ét és a boot alatti üres/placeholder fázist így nem látni — a
+// kijelzőt az ui_display_ready() kapcsolja fel, amikor minden betöltődött.
+static void pre_init_backlight_off(void)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask = 1ULL << PIN_BL,
+        .mode = GPIO_MODE_OUTPUT,
+        .pull_up_en = GPIO_PULLUP_DISABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&cfg);
+    gpio_set_level(PIN_BL, 0);
+}
+
 // GPIO 40 fixen LOW szintre (külső HW követelmény).
 static void init_static_low_pins(void)
 {
@@ -94,6 +110,7 @@ void app_main(void)
     // CS-eket még a SPI inicializálás előtt HIGH-ra — különben a köztes
     // pillanatban a TFT chip lebegő CS-szel SD adatokat venne fel.
     pre_init_cs_pins();
+    pre_init_backlight_off();
     init_static_low_pins();
 
     // Sorrend fontos: SD a SPI buszt is inicializálja, amit az UI újrahasznosít.
@@ -103,6 +120,11 @@ void app_main(void)
     io_init();
 
     player_start();
+
+    // Minden betöltve (címek, böngésző, állapot): most már felkapcsolhatjuk a
+    // háttérvilágítást — a boot alatti fehér flash / üres fázis így rejtve marad.
+    ui_display_ready();
+
     cli_init();
 
     ESP_LOGI(TAG, "init done, free heap=%lu internal=%lu psram=%lu",
