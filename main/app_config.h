@@ -58,9 +58,11 @@
 #define LCD_H_RES           480
 #define LCD_V_RES           320
 // 2 MHz a ST7789-en a dupont-bekötés miatt volt; a ~1.5× nagyobb panelnél
-// használhatatlanul lassú lenne (~1 s/teljes frame). 40 MHz a ST7796-on a
-// gyors kirajzoláshoz — ha csíkozódik/glitch-el a közös buszon, vidd lejjebb.
-#define LCD_SPI_HZ          (40 * 1000 * 1000)
+// használhatatlanul lassú lenne (~1 s/teljes frame). A SCK/MOSI (12/11) a
+// SPI2 IOMUX lábai → 80 MHz is megengedett. Tiszta osztók a 80 MHz APB-ből:
+// 80/40/26.7/20. Ha csíkozódik/„hó"/hibás sor van a közös buszon, vidd
+// vissza 40-re (a dupont-bekötés a 80 határán van).
+#define LCD_SPI_HZ          (80 * 1000 * 1000)
 
 // -----------------------------------------------------------------------------
 // SD mount + zenék
