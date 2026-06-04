@@ -26,20 +26,19 @@ A `Vol +` és `Vol −` támogat **hold-to-repeat**-et: nyomva tartva ~120 ms-on
 
 Megosztott SPI2 buszt használ a TFT és az SD. A panelon 74LVC245A szintillesztő
 (U2) és tranzisztoros háttérvilágítás-driver (Q1–Q3) van. A touch (CTP) egy
-**FT6336** kapacitív kontroller külön I2C buszon — most **nincs bekötve**, a
-lábak előkészítve a jövőre.
+**FT6336** kapacitív kontroller külön I2C buszon (lásd lentebb).
 
 A panel bal oldali 14 lábú headerje, fentről le:
 
 | Panel láb | ESP32-S3 GPIO | Megjegyzés |
 |---|---|---|
 | SD_CS | GPIO 14 | SD card chip select |
-| CTP_INT | *(GPIO 40)* | Touch interrupt — most szabadon hagyva |
-| CTP_SDA | *(GPIO 15)* | Touch I2C SDA — most szabadon hagyva |
-| CTP_RST | *(GPIO 47)* | Touch reset — most szabadon hagyva |
-| CTP_SCL | *(GPIO 18)* | Touch I2C SCL — most szabadon hagyva |
+| CTP_INT | — | **Nem kötjük be** (polling) — lásd a Touch szekciót |
+| CTP_SDA | GPIO 15 | Touch I2C SDA |
+| CTP_RST | GPIO 47 | Touch reset |
+| CTP_SCL | GPIO 18 | Touch I2C SCL |
 | SDO (MISO) | GPIO 13 | SD MISO (a TFT nem használja) |
-| **LED** | **GPIO 16** | Háttérvilágítás. Tranzisztoros driver → logikai szint, direkt GPIO-ról hajtható, **nincs bridge-vágás**. 30 s tétlenség után LOW (idle screen-off), user-eseményre HIGH |
+| **LED** | **GPIO 16** | Háttérvilágítás, **LEDC PWM** (20 kHz). Tranzisztoros driver → logikai szint, direkt GPIO-ról hajtható, **nincs bridge-vágás**. Fényerő 0–100% (Settings / CLI `bl`, NVS-perzisztens), idle alatt duty 0 |
 | SCK | GPIO 12 | SPI clock |
 | SDI (MOSI) | GPIO 11 | SPI MOSI |
 | LCD_RS | GPIO 9 | TFT data/command (DC) |
@@ -48,20 +47,27 @@ A panel bal oldali 14 lábú headerje, fentről le:
 | GND | GND | |
 | VCC | **5V** (USB / VIN) | Onboard LDO. A LVC245 szintillesztő miatt 3V3 is menne, de 5V-on marad az SD rail stabilitásáért |
 
-A TFT SPI órajel **20 MHz** (`LCD_SPI_HZ`), az SD a saját órajelén megy ugyanazon
-a buszon. Ha a nagyobb panelen csíkozódás/glitch van, vidd lejjebb a TFT órajelet.
+A TFT SPI órajel **80 MHz** (`LCD_SPI_HZ`) — a SCK/MOSI (12/11) a SPI2 IOMUX
+lábai, ezért nincs a 40 MHz-es GPIO-mátrix plafon. Az SD a saját órajelén megy
+ugyanazon a buszon. Ha a közös buszon csíkozódás/„hó"/hibás sor van, vidd vissza
+40 MHz-re.
 
-### Touch (FT6336) — későbbi bekötés
+### Touch (FT6336) — bekötés
 
 Külön I2C busz, független a kijelző SPI-tól. Cím 0x38. Driver:
-`espressif/esp_lcd_touch_ft5x06` + `lvgl_port_add_touch(...)`.
+`espressif/esp_lcd_touch_ft5x06` + `lvgl_port_add_touch(...)`, **polling
+módban** (nincs INT láb — az FT6336 fix címen ül, az LVGL amúgy is pollozza).
 
-| Panel láb | ESP32-S3 GPIO |
-|---|---|
-| CTP_SDA | GPIO 15 |
-| CTP_SCL | GPIO 18 |
-| CTP_INT | GPIO 40 |
-| CTP_RST | GPIO 47 |
+| Panel láb | ESP32-S3 GPIO | Megjegyzés |
+|---|---|---|
+| CTP_SDA | GPIO 15 | I2C SDA |
+| CTP_SCL | GPIO 18 | I2C SCL |
+| CTP_RST | GPIO 47 | Touch reset |
+| CTP_INT | — | **Nem kötjük be.** A GPIO 40 (korábbi terv) fixen LOW (külső HW követelmény), más szabad RTC-láb nincs; polling miatt felesleges. |
+
+Megjegyzés: ha az I2C instabil (NACK/olvasási hiba), a modulon hiányozhatnak a
+külső pull-upok — a kód a belső pull-upot bekapcsolja, de 4.7k külső
+ajánlott; vagy vidd 100 kHz-re a `TOUCH_I2C_HZ`-t a [ui.c](main/ui.c)-ben.
 
 ## PCM5102A DAC (I2S)
 
@@ -94,8 +100,13 @@ Jelenleg lebeg — random érték a UI-n. Funkcionálisan nem zavaró.
 - **GPIO 0, 3, 45, 46** — strapping pinek, óvatosan
 - **GPIO 19, 20** — USB D−/D+ (natív USB port)
 - **GPIO 26–37** — belső flash (26–32) + OPI PSRAM (33–37), tilos
+- **GPIO 40** — fixen LOW (külső HW követelmény, `init_static_low_pins`)
 - **GPIO 43, 44** — UART0 RX/TX (a COMM/UART port soros logja, ne használd
   gombnak)
+
+Jelenleg használt szabad lábak: **15, 18** (touch I2C), **47** (touch RST).
+Az **egyetlen szabadon maradt** láb a **GPIO 48** (onboard RGB LED — a firmware
+nem használja).
 
 ## Tápellátás
 

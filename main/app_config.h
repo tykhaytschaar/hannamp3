@@ -28,6 +28,14 @@
 #define PIN_BL              GPIO_NUM_16
 
 // -----------------------------------------------------------------------------
+// Kapacitív touch (FT6336) — külön I2C busz, polling (nincs INT láb)
+// CTP_SDA→15, CTP_SCL→18, CTP_RST→47. CTP_INT nincs bekötve (GPIO 40 foglalt).
+// -----------------------------------------------------------------------------
+#define PIN_TOUCH_SDA       GPIO_NUM_15
+#define PIN_TOUCH_SCL       GPIO_NUM_18
+#define PIN_TOUCH_RST       GPIO_NUM_47
+
+// -----------------------------------------------------------------------------
 // Gombok (mind GND-re zárnak, belső pull-up)
 // -----------------------------------------------------------------------------
 // MENU GPIO 1-en (RTC-capable), hogy deep sleep-ből EXT1 wake-forrás lehessen.

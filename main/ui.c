@@ -13,6 +13,8 @@
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 #include "driver/ledc.h"
+#include "driver/i2c_master.h"
+#include "esp_lcd_touch_ft5x06.h"
 
 #include "lvgl.h"
 #include "esp_lvgl_port.h"
@@ -44,6 +46,7 @@ static lv_display_t *s_disp = NULL;
 //   értékek (másodperc): 10, 15, 30, 0=never
 static int                    s_idle_timeout_s = 30;
 static esp_lcd_panel_handle_t s_panel = NULL;
+static esp_lcd_touch_handle_t s_touch = NULL;   // FT6336 kapacitív touch (polling)
 static int64_t                s_last_activity_us = 0;
 // Boot: a kijelző logikailag "off" (a backlight duty 0), így a player_start
 // mentett-fényerő visszaállítása csak tárol — a tényleges felkapcsolás az
@@ -123,6 +126,7 @@ static char s_cover_path[MAX_PATH_LEN];
 // -----------------------------------------------------------------------------
 // Forward declarations
 // -----------------------------------------------------------------------------
+static void ui_touch_init(void);
 static void build_overlay(void);
 static void build_now_playing(void);
 static void build_library(void);
@@ -238,6 +242,86 @@ void ui_init(void)
     lv_screen_load(U.scr[U.current]);
     update_screen_chip();
     lvgl_port_unlock();
+
+    ui_touch_init();
+}
+
+// -----------------------------------------------------------------------------
+// Touch bring-up (0. fázis) — FT6336 kapacitív, külön I2C busz, polling.
+// Egyelőre csak az LVGL pointer-indev-et regisztrálja + debug-logolja a
+// press-koordinátákat. A widget-ekre kötött viselkedés az 1. fázis.
+// -----------------------------------------------------------------------------
+#define TOUCH_I2C_PORT   I2C_NUM_0
+#define TOUCH_I2C_HZ     400000
+
+// Ellenőrző press-log (transzformált, LVGL-koordináta). Bal-felső ~(0,0),
+// jobb-alsó ~(480,320). Az 1. fázis (widget-viselkedés) után törölhető.
+static void touch_log_event_cb(lv_event_t *e)
+{
+    (void)e;
+    lv_indev_t *indev = lv_indev_active();
+    if (!indev) return;
+    lv_point_t p;
+    lv_indev_get_point(indev, &p);
+    ESP_LOGI(TAG, "touch press @ (%d, %d)", (int)p.x, (int)p.y);
+}
+
+static void ui_touch_init(void)
+{
+    ESP_LOGI(TAG, "FT6336 touch init (I2C %d, SDA %d, SCL %d, RST %d, polling)",
+             TOUCH_I2C_PORT, PIN_TOUCH_SDA, PIN_TOUCH_SCL, PIN_TOUCH_RST);
+
+    // ---- I2C master busz (új driver) ----
+    i2c_master_bus_config_t bus_cfg = {
+        .i2c_port = TOUCH_I2C_PORT,
+        .sda_io_num = PIN_TOUCH_SDA,
+        .scl_io_num = PIN_TOUCH_SCL,
+        .clk_source = I2C_CLK_SRC_DEFAULT,
+        .glitch_ignore_cnt = 7,
+        .flags.enable_internal_pullup = true,   // ha a modulon nincs külső pull-up
+    };
+    i2c_master_bus_handle_t bus = NULL;
+    ESP_ERROR_CHECK(i2c_new_master_bus(&bus_cfg, &bus));
+
+    // ---- esp_lcd panel IO az FT5x06/FT6336 fölé ----
+    esp_lcd_panel_io_handle_t tp_io = NULL;
+    esp_lcd_panel_io_i2c_config_t tp_io_cfg = ESP_LCD_TOUCH_IO_I2C_FT5x06_CONFIG();
+    tp_io_cfg.scl_speed_hz = TOUCH_I2C_HZ;
+    ESP_ERROR_CHECK(esp_lcd_new_panel_io_i2c(bus, &tp_io_cfg, &tp_io));
+
+    // ---- FT5x06/FT6336 touch driver ----
+    // x_max/y_max a panel natív felbontása (320×480 portré, a mirror ezzel
+    // számol). Tájolás a kijelzőhöz igazítva (panelen mérve):
+    //   swap_xy=1  — a nyers x (függőleges) az LVGL-Y-ba
+    //   mirror_x=1 — a függőleges fordított volt (fent 320 → 0)
+    //   mirror_y=0 — a vízszintes jó
+    esp_lcd_touch_config_t tp_cfg = {
+        .x_max = 320,
+        .y_max = 480,
+        .rst_gpio_num = PIN_TOUCH_RST,
+        .int_gpio_num = GPIO_NUM_NC,            // polling — nincs INT láb
+        .levels = { .reset = 0, .interrupt = 0 },
+        .flags = { .swap_xy = 1, .mirror_x = 1, .mirror_y = 0 },
+    };
+    if (esp_lcd_touch_new_i2c_ft5x06(tp_io, &tp_cfg, &s_touch) != ESP_OK) {
+        ESP_LOGE(TAG, "touch init failed — ellenőrizd a bekötést / pull-upokat");
+        return;
+    }
+
+    // ---- LVGL pointer indev ----
+    lvgl_port_lock(0);
+    const lvgl_port_touch_cfg_t touch_lv_cfg = {
+        .disp   = s_disp,
+        .handle = s_touch,
+    };
+    lvgl_port_add_touch(&touch_lv_cfg);
+
+    for (int i = 0; i < UI_SCREEN_COUNT; i++) {
+        lv_obj_add_event_cb(U.scr[i], touch_log_event_cb, LV_EVENT_PRESSED, NULL);
+    }
+    lvgl_port_unlock();
+
+    ESP_LOGI(TAG, "touch ready — bal-felső ~(0,0), jobb-alsó ~(480,320)");
 }
 
 // -----------------------------------------------------------------------------
