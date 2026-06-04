@@ -526,12 +526,16 @@ static void build_now_playing(void)
     transport_btn(trow, LV_SYMBOL_NEXT, PLAYER_ACTION_NEXT, false);
 
     // Mini playlist (alul, 4 sor)
-    U.np_mini_list = make_panel(scr);
-    lv_obj_set_size(U.np_mini_list, 456, 104);
-    lv_obj_align(U.np_mini_list, LV_ALIGN_BOTTOM_LEFT, 12, -8);
-    lv_obj_set_flex_flow(U.np_mini_list, LV_FLEX_FLOW_COLUMN);
+    // Track lista — scrollozható lv_list az album ÖSSZES számával (tap = play).
+    U.np_mini_list = lv_list_create(scr);
+    lv_obj_set_size(U.np_mini_list, 456, 116);
+    lv_obj_align(U.np_mini_list, LV_ALIGN_TOP_LEFT, 12, 196);
+    lv_obj_set_style_bg_color(U.np_mini_list, COL_BG_PANEL, LV_PART_MAIN);
+    lv_obj_set_style_border_width(U.np_mini_list, 0, LV_PART_MAIN);
+    lv_obj_set_style_radius(U.np_mini_list, 8, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(U.np_mini_list, 4, LV_PART_MAIN);
     lv_obj_set_style_pad_row(U.np_mini_list, 2, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(U.np_mini_list, 6, LV_PART_MAIN);
+    lv_obj_set_style_text_font(U.np_mini_list, &mp3_inter_14, LV_PART_MAIN);
 }
 
 // -----------------------------------------------------------------------------
@@ -686,57 +690,51 @@ static void browser_rebuild_list(void)
     browser_apply_cursor();
 }
 
+// Track lista sor tap → az adott album-index lejátszása.
+static void np_tlist_click(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target_obj(e));
+    player_play_index(idx);
+}
+
 static void update_mini_playlist(void)
 {
     if (!U.np_mini_list) return;
     lv_obj_clean(U.np_mini_list);
     if (!U.lib_tracks || U.lib_count == 0) {
-        lv_obj_t *empty = lv_label_create(U.np_mini_list);
-        lv_label_set_text(empty, "(no tracks)");
+        lv_obj_t *empty = lv_list_add_text(U.np_mini_list, "(no tracks)");
         lv_obj_set_style_text_color(empty, COL_TEXT_DIM, 0);
         return;
     }
 
-    // 4 sor: az aktuális +/- környezete. start = current-1 ad némi kontextust,
-    // ha viszont az utolsó negyedben járunk, csúsztatunk, hogy mindig 4-et
-    // mutassunk.
-    int start = U.lib_current - 1;
-    if (start < 0) start = 0;
-    int end = start + 4;
-    if (end > U.lib_count) {
-        end = U.lib_count;
-        start = end - 4;
-        if (start < 0) start = 0;
-    }
-
-    for (int i = start; i < end; i++) {
+    // ÖSSZES track (nem ablakos) — a lista scrollozható. A currently-playing
+    // sor: 3px bal accent stripe + tompa bg, és scroll-to-view rá.
+    lv_obj_t *cur_row = NULL;
+    for (int i = 0; i < U.lib_count; i++) {
         bool is_playing = (i == U.lib_current);
-
-        lv_obj_t *row = lv_obj_create(U.np_mini_list);
-        lv_obj_remove_style_all(row);
-        lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
-        lv_obj_set_style_pad_ver(row, 3, 0);
-        lv_obj_set_style_pad_hor(row, 8, 0);
+        lv_obj_t *btn = lv_list_add_button(U.np_mini_list, LV_SYMBOL_AUDIO,
+                                           U.lib_tracks[i].name);
+        lv_obj_set_user_data(btn, (void *)(intptr_t)i);
+        lv_obj_add_event_cb(btn, np_tlist_click, LV_EVENT_CLICKED, NULL);
+        // Az lv_list gombok alapból alsó keretet (divider) kapnak a témától —
+        // sötét háttéren fehér csíkként látszik. Kikapcsoljuk; a játszott sor
+        // bal oldali accent-csíkját külön rakjuk vissza.
+        lv_obj_set_style_border_width(btn, 0, LV_PART_MAIN);
         if (is_playing) {
-            // A currently-playing track: 3px bal oldali accent stripe + tompa
-            // háttércsík. Az accent stripe biztosítja a WCAG 1.4.11 3:1
-            // non-text kontrasztot a panel ellenében (11:1), a háttér csík
-            // csak finom hangsúly. Nincs PLAY ikon, hogy ne legyen
-            // összetéveszthető a state ikonnal a panel fölött.
-            lv_obj_set_style_bg_color(row, COL_BG_PANEL_2, 0);
-            lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-            lv_obj_set_style_radius(row, 4, 0);
-            lv_obj_set_style_border_color(row, COL_ACCENT, 0);
-            lv_obj_set_style_border_width(row, 3, 0);
-            lv_obj_set_style_border_side(row, LV_BORDER_SIDE_LEFT, 0);
+            lv_obj_set_style_bg_color(btn, COL_BG_PANEL_2, LV_PART_MAIN);
+            lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
+            lv_obj_set_style_radius(btn, 4, LV_PART_MAIN);
+            lv_obj_set_style_border_color(btn, COL_ACCENT, LV_PART_MAIN);
+            lv_obj_set_style_border_width(btn, 3, LV_PART_MAIN);
+            lv_obj_set_style_border_side(btn, LV_BORDER_SIDE_LEFT, LV_PART_MAIN);
+            lv_obj_set_style_text_color(btn, COL_ACCENT, LV_PART_MAIN);
+            cur_row = btn;
+        } else {
+            lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, LV_PART_MAIN);
+            lv_obj_set_style_text_color(btn, COL_TEXT, LV_PART_MAIN);
         }
-
-        lv_obj_t *l = lv_label_create(row);
-        lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
-        lv_obj_set_width(l, lv_pct(100));
-        lv_label_set_text(l, U.lib_tracks[i].name);
-        lv_obj_set_style_text_color(l, is_playing ? COL_ACCENT : COL_TEXT, 0);
     }
+    if (cur_row) lv_obj_scroll_to_view(cur_row, LV_ANIM_OFF);
 }
 
 // -----------------------------------------------------------------------------
