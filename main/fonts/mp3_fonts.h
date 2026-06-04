@@ -15,6 +15,7 @@ extern "C" {
 extern const lv_font_t mp3_inter_12;
 extern const lv_font_t mp3_inter_14;
 extern const lv_font_t mp3_inter_18;
+extern const lv_font_t mp3_inter_24;
 
 // -----------------------------------------------------------------------------
 // Saját ikonok (a hivatalos lv_symbol_def.h-ban nincsenek)

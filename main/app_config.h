@@ -14,7 +14,7 @@
 #define PIN_XSMT            GPIO_NUM_21
 
 // -----------------------------------------------------------------------------
-// SPI2 — TFT (ST7789V) + SD közös busz
+// SPI2 — TFT (ST7796U) + SD közös busz
 // -----------------------------------------------------------------------------
 #define PIN_SPI_SCK         GPIO_NUM_12
 #define PIN_SPI_MOSI        GPIO_NUM_11
@@ -52,12 +52,15 @@
 #define BAT_EMPTY_MV        3300
 
 // -----------------------------------------------------------------------------
-// Display méret
+// Display méret — ST7796U 3.5", natív 320×480 portré, fekvőben 480×320
 // -----------------------------------------------------------------------------
-// Fekvő tájolás (90° CCW)
-#define LCD_H_RES           320
-#define LCD_V_RES           240
-#define LCD_SPI_HZ          (2 * 1000 * 1000)
+// Fekvő tájolás (90° CCW): swap_xy a panelen, lásd ui.c disp_cfg
+#define LCD_H_RES           480
+#define LCD_V_RES           320
+// 2 MHz a ST7789-en a dupont-bekötés miatt volt; a ~1.5× nagyobb panelnél
+// használhatatlanul lassú lenne (~1 s/teljes frame). 40 MHz a ST7796-on a
+// gyors kirajzoláshoz — ha csíkozódik/glitch-el a közös buszon, vidd lejjebb.
+#define LCD_SPI_HZ          (40 * 1000 * 1000)
 
 // -----------------------------------------------------------------------------
 // SD mount + zenék

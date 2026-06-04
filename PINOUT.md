@@ -22,25 +22,46 @@ GND-re. Belső pull-up engedélyezve, lenyomáskor LOW.
 A `Vol +` és `Vol −` támogat **hold-to-repeat**-et: nyomva tartva ~120 ms-onként
 újra-kiadja az eventet.
 
-## ST7789V kijelző + microSD slot
+## ST7796U 3.5" kijelző + FT6336 touch + microSD slot
 
-Megosztott SPI2 buszt használ a TFT és az SD. A panel hátoldali címkéi szerint:
+Megosztott SPI2 buszt használ a TFT és az SD. A panelon 74LVC245A szintillesztő
+(U2) és tranzisztoros háttérvilágítás-driver (Q1–Q3) van. A touch (CTP) egy
+**FT6336** kapacitív kontroller külön I2C buszon — most **nincs bekötve**, a
+lábak előkészítve a jövőre.
+
+A panel bal oldali 14 lábú headerje, fentről le:
 
 | Panel láb | ESP32-S3 GPIO | Megjegyzés |
 |---|---|---|
+| SD_CS | GPIO 14 | SD card chip select |
+| CTP_INT | *(GPIO 40)* | Touch interrupt — most szabadon hagyva |
+| CTP_SDA | *(GPIO 15)* | Touch I2C SDA — most szabadon hagyva |
+| CTP_RST | *(GPIO 47)* | Touch reset — most szabadon hagyva |
+| CTP_SCL | *(GPIO 18)* | Touch I2C SCL — most szabadon hagyva |
+| SDO (MISO) | GPIO 13 | SD MISO (a TFT nem használja) |
+| **LED** | **GPIO 16** | Háttérvilágítás. Tranzisztoros driver → logikai szint, direkt GPIO-ról hajtható, **nincs bridge-vágás**. 30 s tétlenség után LOW (idle screen-off), user-eseményre HIGH |
+| SCK | GPIO 12 | SPI clock |
+| SDI (MOSI) | GPIO 11 | SPI MOSI |
+| LCD_RS | GPIO 9 | TFT data/command (DC) |
+| LCD_RST | GPIO 8 | TFT reset |
+| LCD_CS | GPIO 10 | TFT chip select |
 | GND | GND | |
-| VCC | **5V** (USB / VIN) | A panelen lévő AMS1117-3V3 LDO-nak kell 5V bemenet, különben az SD insert mellett a rail beesik |
-| SCL | GPIO 12 | SPI clock |
-| SDA | GPIO 11 | SPI MOSI |
-| RST | GPIO 8 | TFT reset |
-| DC | GPIO 9 | TFT data/command |
-| CS | GPIO 10 | TFT chip select |
-| CS-TF | GPIO 14 | SD card chip select |
-| OUT | GPIO 13 | SD MISO (a TFT nem használja) |
-| **BLK / LED+** | **GPIO 16** | Háttérvilágítás. 30 s tétlenség után LOW (idle screen-off), user-eseményre HIGH. A modul 3V3 → BLK hidat le kell venni |
+| VCC | **5V** (USB / VIN) | Onboard LDO. A LVC245 szintillesztő miatt 3V3 is menne, de 5V-on marad az SD rail stabilitásáért |
 
-Az SPI órajel 10 MHz (mind a TFT, mind az SD oldalán) — a közös buszon óvatos
-érték, magasabb órajelen jelintegritási problémák lehetnek.
+A TFT SPI órajel **20 MHz** (`LCD_SPI_HZ`), az SD a saját órajelén megy ugyanazon
+a buszon. Ha a nagyobb panelen csíkozódás/glitch van, vidd lejjebb a TFT órajelet.
+
+### Touch (FT6336) — későbbi bekötés
+
+Külön I2C busz, független a kijelző SPI-tól. Cím 0x38. Driver:
+`espressif/esp_lcd_touch_ft5x06` + `lvgl_port_add_touch(...)`.
+
+| Panel láb | ESP32-S3 GPIO |
+|---|---|
+| CTP_SDA | GPIO 15 |
+| CTP_SCL | GPIO 18 |
+| CTP_INT | GPIO 40 |
+| CTP_RST | GPIO 47 |
 
 ## PCM5102A DAC (I2S)
 

@@ -10,6 +10,7 @@ idf_component_register(
         "fonts/mp3_inter_12.c"
         "fonts/mp3_inter_14.c"
         "fonts/mp3_inter_18.c"
+        "fonts/mp3_inter_24.c"
     INCLUDE_DIRS "." "fonts"
     PRIV_INCLUDE_DIRS
         # Helix MP3 internal headers (FrameHeader / SideInfo / IMDCTInfo / ...

@@ -35,6 +35,26 @@ dependencies:
       registry_url: https://components.espressif.com/
       type: service
     version: 0.5.3
+  espressif/esp_lcd_st7796:
+    component_hash: 528a864b7dd447aa78472680a1f3e294c8045b4e64d479d176c3c66aa6f7edee
+    dependencies:
+    - name: espressif/cmake_utilities
+      registry_url: https://components.espressif.com/
+      require: private
+      version: 0.*
+    - name: idf
+      require: private
+      version: '>=4.4'
+    source:
+      registry_url: https://components.espressif.com/
+      type: service
+    targets:
+    - esp32
+    - esp32s2
+    - esp32s3
+    - esp32p4
+    - esp32c3
+    version: 1.4.0
   espressif/esp_lvgl_port:
     component_hash: 378e8c7c11866041ac16a67387c6e44016aea63566613a1321b2f077ee523c53
     dependencies:
@@ -63,9 +83,10 @@ dependencies:
 direct_dependencies:
 - chmorgan/esp-libhelix-mp3
 - espressif/button
+- espressif/esp_lcd_st7796
 - espressif/esp_lvgl_port
 - idf
 - lvgl/lvgl
-manifest_hash: 82c3073243b98bd773cba7a67fffbe451fcc8bea44e2d9d3168661ab7a51380a
+manifest_hash: 34825704ef5722c30febb5143295a89e6ce75198250d577e4ab077a924dd884a
 target: esp32s3
 version: 2.0.0

@@ -9,6 +9,7 @@
 #include "esp_lcd_panel_io.h"
 #include "esp_lcd_panel_ops.h"
 #include "esp_lcd_panel_vendor.h"
+#include "esp_lcd_st7796.h"
 #include "driver/spi_master.h"
 #include "driver/gpio.h"
 
@@ -22,7 +23,7 @@
 static const char *TAG = "ui";
 
 // -----------------------------------------------------------------------------
-// Theme tokens (új sötét/cyan design, 320×240-re hangolva)
+// Theme tokens (sötét/cyan design, 480×320-ra hangolva)
 // -----------------------------------------------------------------------------
 #define COL_BG          lv_color_hex(0x0E1116)
 #define COL_BG_PANEL    lv_color_hex(0x161B22)
@@ -122,7 +123,7 @@ static void settings_render_cursor_locked(void);
 // -----------------------------------------------------------------------------
 void ui_init(void)
 {
-    ESP_LOGI(TAG, "ST7789 + LVGL init");
+    ESP_LOGI(TAG, "ST7796 + LVGL init");
 
     // ---- esp_lcd panel IO (SPI2, közös busz az SD-vel) ----
     esp_lcd_panel_io_handle_t io_handle = NULL;
@@ -140,13 +141,17 @@ void ui_init(void)
     esp_lcd_panel_handle_t panel = NULL;
     esp_lcd_panel_dev_config_t dev_cfg = {
         .reset_gpio_num = PIN_TFT_RST,
-        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB,
+        // Ez a ST7796 modul BGR sorrendben várja a színt — RGB-vel a cyan
+        // sárgászöldként jött (R↔B csere). EMPIRIKUS KNOB #3.
+        .rgb_ele_order = LCD_RGB_ELEMENT_ORDER_BGR,
         .bits_per_pixel = 16,
     };
-    ESP_ERROR_CHECK(esp_lcd_new_panel_st7789(io_handle, &dev_cfg, &panel));
+    ESP_ERROR_CHECK(esp_lcd_new_panel_st7796(io_handle, &dev_cfg, &panel));
     esp_lcd_panel_reset(panel);
     vTaskDelay(pdMS_TO_TICKS(100));
     esp_lcd_panel_init(panel);
+    // EMPIRIKUS KNOB #1: szín-inverzió. IPS ST7796-on általában true kell, de
+    // panelfüggő — ha negatív/fordított a kép, állítsd false-ra.
     esp_lcd_panel_invert_color(panel, true);
     esp_lcd_panel_disp_on_off(panel, true);
     s_panel = panel;                                  // idle/wake-hez
@@ -177,7 +182,9 @@ void ui_init(void)
         .hres = LCD_H_RES,
         .vres = LCD_V_RES,
         .monochrome = false,
-        .rotation = { .swap_xy = true, .mirror_x = false, .mirror_y = true },
+        // ST7796 fekvő (swap_xy). 180°-ra forgatva: mindkét mirror flag false.
+        // (BGR-fix a dev_cfg-ben.) EMPIRIKUS KNOB #2.
+        .rotation = { .swap_xy = true, .mirror_x = false, .mirror_y = false },
         .flags = { .buff_dma = true, .buff_spiram = false, .swap_bytes = true },
     };
     s_disp = lvgl_port_add_disp(&disp_cfg);
@@ -214,8 +221,8 @@ static void apply_screen_bg(lv_obj_t *scr)
     lv_obj_set_style_text_color(scr, COL_TEXT, LV_PART_MAIN);
     lv_obj_set_style_pad_all(scr, 0, LV_PART_MAIN);
     // Default font az egész screen-en — minden label örökli, kivéve ahol
-    // explicit font van beállítva (title 18, subtitle 14).
-    lv_obj_set_style_text_font(scr, &mp3_inter_12, LV_PART_MAIN);
+    // explicit font van beállítva (title 24, subtitle 18).
+    lv_obj_set_style_text_font(scr, &mp3_inter_14, LV_PART_MAIN);
 }
 
 static lv_obj_t *make_panel(lv_obj_t *parent)
@@ -245,7 +252,7 @@ static void build_overlay(void)
     // így itt is explicit be kell állítani. Különben az LVGL beépített
     // lv_font_montserrat_14-et használnák, amiben nincsenek a saját
     // ikonjaink (MP3_SYMBOL_LOCK / MP3_SYMBOL_UNLOCK) — négyzet jelenne meg.
-    lv_obj_set_style_text_font(top, &mp3_inter_12, LV_PART_MAIN);
+    lv_obj_set_style_text_font(top, &mp3_inter_14, LV_PART_MAIN);
 
     U.ovr_screen_chip = lv_label_create(top);
     lv_obj_set_style_text_color(U.ovr_screen_chip, COL_ACCENT, LV_PART_MAIN);
@@ -274,74 +281,74 @@ static void update_screen_chip(void)
 
 // -----------------------------------------------------------------------------
 // Screen 1: Now Playing
-// Layout 320×240:
-//   y 0..24    : overlay header (screen chip + battery)
-//   y 28..148  : cover 120×120 (bal) + info blokk (jobb)
-//   y 152..232 : mini playlist panel (3 sor)
+// Layout 480×320:
+//   y   0..28    : overlay header (screen chip + lock + battery)
+//   y  32..192   : cover 160×160 (bal) + info blokk (jobb, x=184, w=284)
+//   y 204..308   : mini playlist panel (4 sor)
 // -----------------------------------------------------------------------------
 static void build_now_playing(void)
 {
     lv_obj_t *scr = U.scr[UI_SCREEN_NOW_PLAYING];
 
-    // Cover (bal oldal)
+    // Cover (bal oldal) — 160×160 rounded panel, JPG fallback hely
     U.np_img_cover = lv_image_create(scr);
-    lv_obj_set_size(U.np_img_cover, 120, 120);
-    lv_obj_align(U.np_img_cover, LV_ALIGN_TOP_LEFT, 8, 28);
+    lv_obj_set_size(U.np_img_cover, 160, 160);
+    lv_obj_align(U.np_img_cover, LV_ALIGN_TOP_LEFT, 12, 32);
     lv_obj_set_style_bg_color(U.np_img_cover, COL_BG_PANEL, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(U.np_img_cover, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_set_style_radius(U.np_img_cover, 6, LV_PART_MAIN);
+    lv_obj_set_style_radius(U.np_img_cover, 8, LV_PART_MAIN);
     lv_obj_set_style_clip_corner(U.np_img_cover, true, LV_PART_MAIN);
 
-    // Info blokk (jobb oldal): title, artist, progress, time, state + volume
-    // Egységes baseline x=140, szélesség 172
+    // Info blokk (jobb oldal): title, subtitle, progress, time, state + volume
+    // Egységes baseline x=184, szélesség 284 (480 - 184 - 12)
     U.np_lbl_title = lv_label_create(scr);
     lv_label_set_long_mode(U.np_lbl_title, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(U.np_lbl_title, 172);
-    lv_obj_align(U.np_lbl_title, LV_ALIGN_TOP_LEFT, 140, 30);
-    lv_obj_set_style_text_font(U.np_lbl_title, &mp3_inter_18, 0);
+    lv_obj_set_width(U.np_lbl_title, 284);
+    lv_obj_align(U.np_lbl_title, LV_ALIGN_TOP_LEFT, 184, 36);
+    lv_obj_set_style_text_font(U.np_lbl_title, &mp3_inter_24, 0);
     lv_obj_set_style_text_color(U.np_lbl_title, COL_TEXT, 0);
     lv_label_set_text(U.np_lbl_title, "—");
 
     U.np_lbl_subtitle = lv_label_create(scr);
     lv_label_set_long_mode(U.np_lbl_subtitle, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(U.np_lbl_subtitle, 172);
-    lv_obj_align(U.np_lbl_subtitle, LV_ALIGN_TOP_LEFT, 140, 54);
-    lv_obj_set_style_text_font(U.np_lbl_subtitle, &mp3_inter_14, 0);
+    lv_obj_set_width(U.np_lbl_subtitle, 284);
+    lv_obj_align(U.np_lbl_subtitle, LV_ALIGN_TOP_LEFT, 184, 74);
+    lv_obj_set_style_text_font(U.np_lbl_subtitle, &mp3_inter_18, 0);
     lv_obj_set_style_text_color(U.np_lbl_subtitle, COL_TEXT_DIM, 0);
     lv_label_set_text(U.np_lbl_subtitle, "");
 
     U.np_bar_progress = lv_bar_create(scr);
-    lv_obj_set_size(U.np_bar_progress, 172, 6);
-    lv_obj_align(U.np_bar_progress, LV_ALIGN_TOP_LEFT, 140, 90);
+    lv_obj_set_size(U.np_bar_progress, 284, 8);
+    lv_obj_align(U.np_bar_progress, LV_ALIGN_TOP_LEFT, 184, 124);
     lv_bar_set_range(U.np_bar_progress, 0, 1000);
     lv_bar_set_value(U.np_bar_progress, 0, LV_ANIM_OFF);
     lv_obj_set_style_bg_color(U.np_bar_progress, COL_BG_PANEL_2, LV_PART_MAIN);
     lv_obj_set_style_bg_color(U.np_bar_progress, COL_ACCENT, LV_PART_INDICATOR);
-    lv_obj_set_style_radius(U.np_bar_progress, 3, LV_PART_MAIN);
-    lv_obj_set_style_radius(U.np_bar_progress, 3, LV_PART_INDICATOR);
+    lv_obj_set_style_radius(U.np_bar_progress, 4, LV_PART_MAIN);
+    lv_obj_set_style_radius(U.np_bar_progress, 4, LV_PART_INDICATOR);
 
     U.np_lbl_time = lv_label_create(scr);
-    lv_obj_align(U.np_lbl_time, LV_ALIGN_TOP_LEFT, 140, 102);
+    lv_obj_align(U.np_lbl_time, LV_ALIGN_TOP_LEFT, 184, 140);
     lv_obj_set_style_text_color(U.np_lbl_time, COL_TEXT_DIM, 0);
     lv_label_set_text(U.np_lbl_time, "0:00 / 0:00");
 
     U.np_lbl_state = lv_label_create(scr);
-    lv_obj_align(U.np_lbl_state, LV_ALIGN_TOP_LEFT, 140, 124);
+    lv_obj_align(U.np_lbl_state, LV_ALIGN_TOP_LEFT, 184, 168);
     lv_obj_set_style_text_color(U.np_lbl_state, COL_ACCENT, 0);
     lv_label_set_text(U.np_lbl_state, LV_SYMBOL_STOP);   // boot-kor idle
 
     U.np_lbl_volume = lv_label_create(scr);
-    lv_obj_align(U.np_lbl_volume, LV_ALIGN_TOP_LEFT, 168, 124);
+    lv_obj_align(U.np_lbl_volume, LV_ALIGN_TOP_LEFT, 216, 168);
     lv_obj_set_style_text_color(U.np_lbl_volume, COL_TEXT, 0);
     lv_label_set_text(U.np_lbl_volume, LV_SYMBOL_VOLUME_MAX " 70%");
 
-    // Mini playlist (alul, 3 sor)
+    // Mini playlist (alul, 4 sor)
     U.np_mini_list = make_panel(scr);
-    lv_obj_set_size(U.np_mini_list, 304, 80);
-    lv_obj_align(U.np_mini_list, LV_ALIGN_BOTTOM_LEFT, 8, -6);
+    lv_obj_set_size(U.np_mini_list, 456, 104);
+    lv_obj_align(U.np_mini_list, LV_ALIGN_BOTTOM_LEFT, 12, -8);
     lv_obj_set_flex_flow(U.np_mini_list, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(U.np_mini_list, 2, LV_PART_MAIN);
-    lv_obj_set_style_pad_all(U.np_mini_list, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(U.np_mini_list, 6, LV_PART_MAIN);
 }
 
 // -----------------------------------------------------------------------------
@@ -351,17 +358,17 @@ static void build_library(void)
 {
     lv_obj_t *scr = U.scr[UI_SCREEN_LIBRARY];
 
-    // Aktuális könyvtár fejléc (a "LIB" chip alatt)
+    // Aktuális könyvtár fejléc (a "LIB" chip alatt) — 480×320-on bővebb sáv
     U.lib_path = lv_label_create(scr);
     lv_label_set_long_mode(U.lib_path, LV_LABEL_LONG_DOT);
-    lv_obj_set_width(U.lib_path, 304);
-    lv_obj_align(U.lib_path, LV_ALIGN_TOP_LEFT, 8, 28);
+    lv_obj_set_width(U.lib_path, 456);
+    lv_obj_align(U.lib_path, LV_ALIGN_TOP_LEFT, 12, 30);
     lv_obj_set_style_text_color(U.lib_path, COL_TEXT_DIM, LV_PART_MAIN);
     lv_label_set_text(U.lib_path, "/");
 
     U.lib_list = lv_list_create(scr);
-    lv_obj_set_size(U.lib_list, 304, 184);
-    lv_obj_align(U.lib_list, LV_ALIGN_TOP_LEFT, 8, 48);
+    lv_obj_set_size(U.lib_list, 456, 254);
+    lv_obj_align(U.lib_list, LV_ALIGN_TOP_LEFT, 12, 56);
     lv_obj_set_style_bg_color(U.lib_list, COL_BG_PANEL, LV_PART_MAIN);
     lv_obj_set_style_border_width(U.lib_list, 0, LV_PART_MAIN);
     lv_obj_set_style_radius(U.lib_list, 8, LV_PART_MAIN);
@@ -402,10 +409,10 @@ static void build_settings(void)
     lv_obj_t *scr = U.scr[UI_SCREEN_SETTINGS];
 
     lv_obj_t *panel = make_panel(scr);
-    lv_obj_set_size(panel, 304, 200);
-    lv_obj_align(panel, LV_ALIGN_TOP_LEFT, 8, 30);
+    lv_obj_set_size(panel, 456, 276);
+    lv_obj_align(panel, LV_ALIGN_TOP_LEFT, 12, 32);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_style_pad_row(panel, 4, LV_PART_MAIN);
+    lv_obj_set_style_pad_row(panel, 6, LV_PART_MAIN);
 
     // Sorrend: fent a nem-szerkeszthetők, alul a szerkeszthetők (kurzor csak
     // az utóbbiakon mozog). Egy blokk, vizuális szeparátor nélkül.
@@ -504,10 +511,17 @@ static void update_mini_playlist(void)
         return;
     }
 
+    // 4 sor: az aktuális +/- környezete. start = current-1 ad némi kontextust,
+    // ha viszont az utolsó negyedben járunk, csúsztatunk, hogy mindig 4-et
+    // mutassunk.
     int start = U.lib_current - 1;
     if (start < 0) start = 0;
-    int end = start + 3;
-    if (end > U.lib_count) end = U.lib_count;
+    int end = start + 4;
+    if (end > U.lib_count) {
+        end = U.lib_count;
+        start = end - 4;
+        if (start < 0) start = 0;
+    }
 
     for (int i = start; i < end; i++) {
         bool is_playing = (i == U.lib_current);
