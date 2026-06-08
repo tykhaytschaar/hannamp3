@@ -413,7 +413,7 @@ static void build_overlay(void)
 
     U.ovr_screen_chip = lv_label_create(top);
     lv_obj_set_style_text_color(U.ovr_screen_chip, COL_ACCENT, LV_PART_MAIN);
-    lv_label_set_text(U.ovr_screen_chip, "NOW");
+    lv_label_set_text(U.ovr_screen_chip, "NOW PLAYING");
     lv_obj_align(U.ovr_screen_chip, LV_ALIGN_TOP_LEFT, 8, 6);
 
     U.ovr_battery = lv_label_create(top);
@@ -438,7 +438,7 @@ static void build_overlay(void)
 
 static void update_screen_chip(void)
 {
-    static const char *labels[UI_SCREEN_COUNT] = { "NOW", "LIB", "SET" };
+    static const char *labels[UI_SCREEN_COUNT] = { "NOW PLAYING", "LIBRARY", "SETTINGS" };
     if (!U.ovr_screen_chip) return;
     lv_label_set_text(U.ovr_screen_chip, labels[U.current]);
 }
