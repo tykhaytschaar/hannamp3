@@ -93,6 +93,20 @@ void player_set_volume(uint8_t vol)
     persist_set_i32("volume", (int32_t)vol);
 }
 
+// Settings "Display off" sor tap: a timeout ciklikus léptetése + NVS-mentés.
+void player_cycle_idle_timeout(void)
+{
+    int v = ui_cycle_idle_timeout(+1);   // 10→15→30→Never→10, frissíti a labelt
+    persist_set_i32("idle_s", v);
+}
+
+// Settings "Sleep" sor tap: on/off váltás + NVS-mentés.
+void player_toggle_sleep(void)
+{
+    bool en = ui_toggle_sleep_enabled();
+    persist_set_i32("sleep_en", en ? 1 : 0);
+}
+
 static void browser_refresh(void)
 {
     // FONTOS: itt NINCS NVS-írás. Régen minden mappa-navigáció persist_set_str-t
@@ -279,9 +293,8 @@ void player_handle_button(btn_event_t evt)
     case BTN_EVT_NEXT:
     case BTN_EVT_PREV: {
         if (scr == UI_SCREEN_SETTINGS) {
-            // Next = edit be, Prev = edit ki. Az érték-változások auto-save-ek,
-            // ezért nincs revert: Prev egyszerűen csak kilép az edit módból.
-            ui_settings_set_editing(evt == BTN_EVT_NEXT);
+            // Settings touch-vezérelt (sliderek + tap-cycle sorok) — a
+            // Next/Prev gombnak itt nincs funkciója.
             break;
         }
         if (scr == UI_SCREEN_LIBRARY) {
@@ -320,46 +333,10 @@ void player_handle_button(btn_event_t evt)
             browser_move_cursor(-dir);   // VolUp = kurzor fel
             break;
         }
-        if (scr == UI_SCREEN_SETTINGS) {
-            if (!ui_settings_is_editing()) {
-                // Kurzor mozgatása az állítható elemek között (VolUp = fel).
-                ui_settings_move_cursor(-dir);
-            } else {
-                // Edit módban: érték állítása a kiválasztott elemnél.
-                switch (ui_settings_get_cursor()) {
-                case UI_SETTING_VOLUME: {
-                    uint8_t v = audio_get_volume();
-                    if (dir > 0) v = (v + 2 > 100) ? 100 : v + 2;
-                    else         v = (v < 2)       ? 0   : v - 2;
-                    audio_set_volume(v);
-                    ui_set_volume(v);
-                    break;
-                }
-                case UI_SETTING_BACKLIGHT: {
-                    // Fényerő ±10% lépés, alkalmazás + azonnali NVS-mentés.
-                    int v = ui_get_backlight();
-                    if (dir > 0) v = (v + 10 > 100) ? 100 : v + 10;
-                    else         v = (v < 10)       ? 0   : v - 10;
-                    player_set_backlight((uint8_t)v);
-                    break;
-                }
-                case UI_SETTING_IDLE_TIMEOUT: {
-                    // Érték állítás + azonnali NVS-mentés (no PLAY-to-save).
-                    int v = ui_cycle_idle_timeout(dir);
-                    persist_set_i32("idle_s", v);
-                    break;
-                }
-                case UI_SETTING_SLEEP: {
-                    bool en = ui_toggle_sleep_enabled();   // on/off — dir mindegy
-                    persist_set_i32("sleep_en", en ? 1 : 0);
-                    break;
-                }
-                default: break;
-                }
-            }
-            break;
-        }
-        // Now Playing: hangerő közvetlen állítás.
+        // Now Playing ÉS Settings: globális hangerő. (A Settings touch-vezérelt:
+        // a sliderek a sorokon; a gombok itt is csak a hangerőt állítják. A
+        // gombbal NEM perzisztálunk — a hold-repeat sok flash-írása megakasztaná
+        // az audiót; a slider release-e menti a hangerőt.)
         uint8_t v = audio_get_volume();
         if (dir > 0) v = (v + 2 > 100) ? 100 : v + 2;
         else         v = (v < 2)       ? 0   : v - 2;

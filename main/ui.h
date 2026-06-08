@@ -106,16 +106,9 @@ int  ui_get_idle_timeout_s(void);
 int  ui_cycle_idle_timeout(int dir);
 
 // -----------------------------------------------------------------------------
-// Settings képernyő — kurzor + edit mód az állítható elemek között.
-// A NOW Playing aktuális dal highlightjához hasonlóan:
-//   - kurzor (nem-edit): 3 px accent-színű bal-oldali csík
-//   - edit mód: a teljes sor highlighted (sötétebb háttér + bal csík)
-//
-// Gombok a player.c-ből (Settings képernyőn):
-//   Vol +/−   : edit-en kívül kurzor mozgatása; edit-en belül érték ±
-//   Next      : edit mód bekapcsolása az aktuális elemen
-//   Prev      : edit mód kikapcsolása + revert az eredeti értékre
-//   Play      : edit mód kikapcsolása + perzisztens mentés (NVS)
+// Settings képernyő — touch-vezérelt: volume/brightness sliderek, Display off /
+// Sleep tap-cycle sorok. Nincs edit-mód; a kurzor csak vizuális (a legutóbb
+// érintett soron 3 px accent bal-csík). Az értékeket a player.c menti NVS-be.
 // -----------------------------------------------------------------------------
 typedef enum {
     UI_SETTING_VOLUME = 0,
@@ -124,11 +117,6 @@ typedef enum {
     UI_SETTING_SLEEP,
     UI_SETTING_COUNT
 } ui_setting_t;
-
-void          ui_settings_move_cursor(int delta);
-bool          ui_settings_is_editing(void);
-void          ui_settings_set_editing(bool on);
-ui_setting_t  ui_settings_get_cursor(void);
 
 // Sleep on/off — ha enabled és minden feltétel teljesül, a player_task
 // deep sleep-be megy. A player.c menti NVS-be (sleep_en key).

@@ -19,6 +19,10 @@ void player_set_backlight(uint8_t pct);
 // slider release-e hívja; boot-kor a player_start olvassa vissza (default 70).
 void player_set_volume(uint8_t vol);
 
+// Settings tap-cycle sorok (touch): léptetés/váltás + NVS-mentés.
+void player_cycle_idle_timeout(void);   // "Display off" sor
+void player_toggle_sleep(void);         // "Sleep" sor
+
 // Now Playing transport gombok (touch). A 4 akció a fizikai gombok útjára
 // képződik le; a STOP új (audio_stop + UI reset). Alvó kijelzőn csak ébreszt.
 typedef enum {

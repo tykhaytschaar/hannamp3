@@ -68,9 +68,9 @@ static uint8_t s_bl_percent = BL_PCT_DEFAULT;
 
 static void backlight_apply(void);
 
-// Settings képernyő kurzor + edit állapot
-static int  s_set_cursor  = 0;     // melyik szerkeszthető elemen áll
-static bool s_set_editing = false; // épp módosítjuk-e
+// Settings képernyő kurzor — csak vizuális (a legutóbb érintett sor), touch óta
+// nincs edit-mód.
+static int  s_set_cursor  = 0;
 
 // Sleep enable — a player_task használja a deep sleep döntéshez.
 // Default false: a felhasználó kapcsolja be a Settings-ből.
@@ -347,11 +347,20 @@ static void screen_gesture_cb(lv_event_t *e)
     (void)e;
     lv_indev_t *indev = lv_indev_active();
     if (!indev) return;
+    // Ne váltsunk képernyőt, ha a gesztus egy slider húzásából (Settings) vagy
+    // egy lista görgetéséből származik — különben a vízszintes slider-drag
+    // átugrana az előző/következő oldalra.
+    lv_obj_t *act = lv_indev_get_active_obj();
+    if (act && lv_obj_check_type(act, &lv_slider_class)) return;
+    if (lv_indev_get_scroll_obj(indev)) return;
     lv_dir_t dir = lv_indev_get_gesture_dir(indev);
-    if (dir == LV_DIR_LEFT) {
-        ui_next_screen();
-    } else if (dir == LV_DIR_RIGHT) {
-        ui_prev_screen();
+    if (dir == LV_DIR_LEFT || dir == LV_DIR_RIGHT) {
+        if (dir == LV_DIR_LEFT) ui_next_screen();
+        else                    ui_prev_screen();
+        // A touch hátralévő részét (a felengedésig) eldobjuk, különben az ujj
+        // felengedése már az ÚJ képernyő egy során click-et generálna → swipe
+        // után véletlen track-kiválasztás.
+        lv_indev_wait_release(indev);
     }
 }
 
@@ -644,6 +653,27 @@ static lv_obj_t *settings_slider_row(lv_obj_t *parent, const char *icon,
     return row;
 }
 
+// "Display off" sor tap → timeout léptetés (player.c menti NVS-be). Alvó
+// kijelzőn csak ébreszt. (Nincs lista-rebuild, így nem kell lv_async_call.)
+static void display_off_row_click(lv_event_t *e)
+{
+    (void)e;
+    if (ui_user_activity()) return;
+    s_set_cursor = UI_SETTING_IDLE_TIMEOUT;
+    player_cycle_idle_timeout();
+    settings_render_cursor_locked();   // event-ctx: a lock már a miénk
+}
+
+// "Sleep" sor tap → on/off váltás (player.c menti NVS-be). Alvón csak ébreszt.
+static void sleep_row_click(lv_event_t *e)
+{
+    (void)e;
+    if (ui_user_activity()) return;
+    s_set_cursor = UI_SETTING_SLEEP;
+    player_toggle_sleep();
+    settings_render_cursor_locked();
+}
+
 static lv_obj_t *settings_row(lv_obj_t *parent, const char *icon, const char *label,
                               lv_obj_t **out_value)
 {
@@ -706,8 +736,14 @@ static void build_settings(void)
                             sld_backlight_cb, &U.set_sld_backlight, &U.set_val_backlight);
     U.set_row[UI_SETTING_IDLE_TIMEOUT] =
         settings_row(panel, NULL, "Display off", &U.set_val_idle);
+    lv_obj_add_flag(U.set_row[UI_SETTING_IDLE_TIMEOUT], LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(U.set_row[UI_SETTING_IDLE_TIMEOUT], display_off_row_click,
+                        LV_EVENT_CLICKED, NULL);
     U.set_row[UI_SETTING_SLEEP] =
         settings_row(panel, NULL, "Sleep", &U.set_val_sleep);
+    lv_obj_add_flag(U.set_row[UI_SETTING_SLEEP], LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(U.set_row[UI_SETTING_SLEEP], sleep_row_click,
+                        LV_EVENT_CLICKED, NULL);
     if (U.set_val_idle)  idle_label_refresh_locked();   // induló érték kiírása
     if (U.set_val_sleep) lv_label_set_text(U.set_val_sleep, s_sleep_enabled ? "On" : "Off");
 
@@ -875,12 +911,6 @@ void ui_show_screen(ui_screen_t s)
     if (s >= UI_SCREEN_COUNT) return;
     lvgl_port_lock(0);
     U.current = s;
-    // Settings-ből kilépéskor az edit mód mindig kapcsolódjon ki, hogy ne
-    // legyen "ragadt" edit állapot a következő belépéskor.
-    if (s != UI_SCREEN_SETTINGS && s_set_editing) {
-        s_set_editing = false;
-        settings_render_cursor_locked();
-    }
     lv_screen_load(U.scr[s]);
     update_screen_chip();
     lvgl_port_unlock();
@@ -1150,35 +1180,6 @@ static void settings_render_cursor_locked(void)
             lv_obj_set_style_pad_left(row, 12, 0);
         }
     }
-}
-
-void ui_settings_move_cursor(int delta)
-{
-    if (s_set_editing) return;
-    int n = (int)UI_SETTING_COUNT;
-    s_set_cursor = ((s_set_cursor + delta) % n + n) % n;
-    lvgl_port_lock(0);
-    settings_render_cursor_locked();
-    lvgl_port_unlock();
-}
-
-bool ui_settings_is_editing(void)
-{
-    return s_set_editing;
-}
-
-void ui_settings_set_editing(bool on)
-{
-    if (s_set_editing == on) return;
-    s_set_editing = on;
-    lvgl_port_lock(0);
-    settings_render_cursor_locked();
-    lvgl_port_unlock();
-}
-
-ui_setting_t ui_settings_get_cursor(void)
-{
-    return (ui_setting_t)s_set_cursor;
 }
 
 void ui_set_sleep_enabled(bool enabled)
