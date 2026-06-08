@@ -10,6 +10,10 @@ Layout:
     Jobb    : eszköz kimenete (görgethető curses pad)
     Alul    : cmd + payload prompt
 
+Helyi parancsok (nem mennek az eszköznek):
+    cmd='port', payload='close' → soros port lezárása (flasheléshez)
+    cmd='port', payload='open'  → port visszanyitása
+
 Promptban:
     'quit' / 'exit' / 'q' vagy ESC → kilépés
     PgUp / PgDn     : kimenet-pane görgetése egy oldal fel/le
@@ -162,13 +166,16 @@ def main_tui(stdscr, port_path, baud, log_path):
         except OSError as e:
             raise RuntimeError(f"Log fájl nem nyitható ({log_path}): {e}")
 
+    port_closed = [False]   # 'port close' → True; a header is ezt mutatja
+
     def render_header():
         header.bkgd(' ', curses.A_REVERSE)
         header.erase()
         tail_marker = "" if output.follow else "  [SCROLLED — End-tel élőre]"
         log_marker  = f"  log→{Path(log_path).name}" if log_path else ""
+        port_marker = "  [PORT ZÁRVA — 'port open']" if port_closed[0] else ""
         text = (f" hannamp3 CLI REPL  @ {port_path}  {baud} bps   "
-                f"'quit' vagy ESC{log_marker}{tail_marker} ")
+                f"'quit' vagy ESC{log_marker}{port_marker}{tail_marker} ")
         header.addstr(0, 0, text[:w - 1])
         header.refresh()
 
@@ -191,6 +198,37 @@ def main_tui(stdscr, port_path, baud, log_path):
     t = threading.Thread(target=reader_loop,
                          args=(ser, out_q, stop_ev), daemon=True)
     t.start()
+
+    def close_port():
+        """A soros portot lezárja (pl. flasheléshez), a reader-szálat leállítja."""
+        nonlocal ser
+        if ser is None:
+            return "port már zárva"
+        stop_ev.set()
+        t.join(timeout=0.5)
+        try:
+            ser.close()
+        except Exception:
+            pass
+        ser = None
+        port_closed[0] = True
+        return "port lezárva — most flashelhetsz; 'port open' a visszanyitáshoz"
+
+    def open_port():
+        """A portot újranyitja és új reader-szálat indít."""
+        nonlocal ser, stop_ev, t
+        if ser is not None:
+            return "port már nyitva"
+        try:
+            ser = serial.Serial(port_path, baud, timeout=0.1)
+        except serial.SerialException as e:
+            return f"nem tudtam nyitni: {e}"
+        stop_ev = threading.Event()
+        t = threading.Thread(target=reader_loop,
+                             args=(ser, out_q, stop_ev), daemon=True)
+        t.start()
+        port_closed[0] = False
+        return "port újranyitva"
 
     def drain_output():
         wrote = False
@@ -297,6 +335,29 @@ def main_tui(stdscr, port_path, baud, log_path):
             if not cmd:
                 continue
 
+            # Helyi parancs: a soros portot zárja/nyitja (NEM küld frame-et az
+            # eszköznek). Flasheléshez 'port close', utána 'port open'.
+            if cmd == "port":
+                sub = line_edit("port (open/close): ")
+                if sub is None:
+                    break
+                sub = (sub or "").strip().lower()
+                if sub in ("close", "c"):
+                    msg = close_port()
+                elif sub in ("open", "o"):
+                    msg = open_port()
+                else:
+                    msg = f"port: ismeretlen '{sub}' (open/close)"
+                try:
+                    left.addstr(f" > port {sub}\n")
+                except curses.error:
+                    pass
+                left.refresh()
+                output.write(f"\n[{msg}]\n")
+                output.refresh()
+                render_header()
+                continue
+
             payload = line_edit("payload (üres OK): ")
             if payload is None:
                 break
@@ -309,6 +370,10 @@ def main_tui(stdscr, port_path, baud, log_path):
                 pass
             left.refresh()
 
+            if ser is None:
+                output.write("\n[port zárva — 'port open' előbb]\n")
+                output.refresh()
+                continue
             try:
                 ser.write((frame + "\r\n").encode())
                 ser.flush()
