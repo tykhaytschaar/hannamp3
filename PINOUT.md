@@ -22,7 +22,7 @@ GND-re. Belső pull-up engedélyezve, lenyomáskor LOW.
 A `Vol +` és `Vol −` támogat **hold-to-repeat**-et: nyomva tartva ~120 ms-onként
 újra-kiadja az eventet.
 
-## ST7796U 3.5" kijelző + FT6336 touch + microSD slot
+## ST7796U 3.5" (480×320) kijelző + FT6336 touch + microSD slot
 
 Megosztott SPI2 buszt használ a TFT és az SD. A panelon 74LVC245A szintillesztő
 (U2) és tranzisztoros háttérvilágítás-driver (Q1–Q3) van. A touch (CTP) egy
@@ -45,7 +45,7 @@ A panel bal oldali 14 lábú headerje, fentről le:
 | LCD_RST | GPIO 8 | TFT reset |
 | LCD_CS | GPIO 10 | TFT chip select |
 | GND | GND | |
-| VCC | **5V** (USB / VIN) | Onboard LDO. A LVC245 szintillesztő miatt 3V3 is menne, de 5V-on marad az SD rail stabilitásáért |
+| VCC | **3V3** | A panel és az SD a 3V3 sínről megy (74LVC245A szintillesztőn át). SD-vel együtt is stabil |
 
 A TFT SPI órajel **80 MHz** (`LCD_SPI_HZ`) — a SCK/MOSI (12/11) a SPI2 IOMUX
 lábai, ezért nincs a 40 MHz-es GPIO-mátrix plafon. Az SD a saját órajelén megy
@@ -111,8 +111,8 @@ nem használja).
 ## Tápellátás
 
 - USB tápláláskor a dev kit USB → 5V rail → 3V3 LDO
-- A kijelző-modulra a dev kit `5V` lábáról jön, NEM a `3V3`-ról (különben SD
-  bedugva a panel rail-ja összeesik)
+- A kijelző-modul a dev kit `3V3` lábáról megy (a 74LVC245A szintillesztőn át),
+  SD-vel együtt is stabil
 - A PCM5102 a 3V3 sínről kapja a tápot — terhelése kicsi
 
 Akkus tápra később:
