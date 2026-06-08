@@ -1095,7 +1095,14 @@ void ui_idle_check(void)
 {
     if (s_disp_off || !s_panel) return;
     if (s_idle_timeout_s <= 0) return;        // never
+    // A gomb/CLI aktivitás (s_last_activity_us) ÉS a touch közül a frissebb
+    // számít — a touchot az LVGL tartja nyilván (lv_display_get_inactive_time),
+    // így az érintés (slider, tap, scroll) is ébren tartja a kijelzőt.
     int64_t elapsed_ms = (esp_timer_get_time() - s_last_activity_us) / 1000;
+    if (s_disp) {
+        int64_t touch_ms = (int64_t)lv_display_get_inactive_time(s_disp);
+        if (touch_ms < elapsed_ms) elapsed_ms = touch_ms;
+    }
     if (elapsed_ms >= (int64_t)s_idle_timeout_s * 1000) {
         lvgl_port_lock(0);
         esp_lcd_panel_disp_on_off(s_panel, false);
