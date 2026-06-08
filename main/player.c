@@ -85,7 +85,11 @@ void player_set_backlight(uint8_t pct)
 
 static void browser_refresh(void)
 {
-    persist_set_str("br_dir", s_bpath);   // jegyezzük meg a böngészett könyvtárat
+    // FONTOS: itt NINCS NVS-írás. Régen minden mappa-navigáció persist_set_str-t
+    // hívott, de a flash-commit kikapcsolja az instrukció-cache-t → mindkét mag
+    // megáll pár-tíz ms-ra → az audio megakad lejátszás közben. A böngészett
+    // mappát csak fájl-indításkor mentjük (browser_activate), ami úgyis
+    // track-váltás → a pici stall ott elrejtve.
     s_bcount = sd_list_dir(s_bpath, s_bentries, MAX_DIR_ENTRIES);
     if (s_bcursor >= s_bcount) s_bcursor = s_bcount > 0 ? s_bcount - 1 : 0;
     if (s_bcursor < 0) s_bcursor = 0;
@@ -176,6 +180,9 @@ static void browser_activate(void)
     }
     play_current();
     ui_show_screen(UI_SCREEN_NOW_PLAYING);
+    // A böngészett mappát itt mentjük (nem minden navigációnál) — track-váltás
+    // van, a flash-commit cache-stall-ja a frissen induló lejátszásban elrejtve.
+    persist_set_str("br_dir", s_bpath);
 }
 
 void player_do_action(player_action_t a)
@@ -204,6 +211,20 @@ void player_play_index(int idx)
     }
     s_idx = idx;
     play_current();
+}
+
+void player_browser_tap(int idx)
+{
+    if (ui_user_activity()) return;        // alvó kijelző: a tap csak ébreszt
+    if (idx < 0 || idx >= s_bcount) return;
+    s_bcursor = idx;
+    browser_activate();                    // mappa → belép; fájl → load+play+NOW
+}
+
+void player_browser_up(void)
+{
+    if (ui_user_activity()) return;        // alvó kijelző: a tap csak ébreszt
+    browser_up();
 }
 
 void player_handle_button(btn_event_t evt)

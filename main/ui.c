@@ -646,20 +646,31 @@ static lv_obj_t *list_btn_label(lv_obj_t *btn)
     return NULL;
 }
 
+// Library: nem-gyökér mappában egy UI-only ".." parent sor kerül a lista
+// elejére (child 0). Ilyenkor az s_bentries[i] a (i+1). gyerek. Az offset:
+static bool s_lib_show_parent = false;
+
 static void browser_apply_cursor(void)
 {
     if (!U.lib_list) return;
+    int off = s_lib_show_parent ? 1 : 0;
     uint32_t n = lv_obj_get_child_count(U.lib_list);
     for (uint32_t i = 0; i < n; i++) {
         lv_obj_t *btn = lv_obj_get_child(U.lib_list, i);
-        bool is_cursor = ((int)i == U.br_cursor);
         lv_obj_t *lbl = list_btn_label(btn);
+        bool is_parent = (off && i == 0);
+        bool is_cursor = (!is_parent && (int)i - off == U.br_cursor);
         if (is_cursor) {
             lv_obj_set_style_bg_color(btn, COL_ACCENT, LV_PART_MAIN);
             lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
             lv_obj_set_style_text_color(btn, lv_color_hex(0x06141A), LV_PART_MAIN);
             // Csak a kijelölt sor neve gördül, ha hosszú.
             if (lbl) lv_label_set_long_mode(lbl, LV_LABEL_LONG_SCROLL_CIRCULAR);
+        } else if (is_parent) {
+            // Parent ".." sor: accent szöveg, átlátszó háttér (nem cursor-target).
+            lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, LV_PART_MAIN);
+            lv_obj_set_style_text_color(btn, COL_ACCENT, LV_PART_MAIN);
+            if (lbl) lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
         } else {
             lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, LV_PART_MAIN);
             lv_obj_set_style_text_color(btn, COL_TEXT, LV_PART_MAIN);
@@ -667,15 +678,35 @@ static void browser_apply_cursor(void)
             if (lbl) lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
         }
     }
-    if (U.br_cursor >= 0 && (uint32_t)U.br_cursor < n) {
-        lv_obj_scroll_to_view(lv_obj_get_child(U.lib_list, U.br_cursor), LV_ANIM_ON);
+    int cur_child = U.br_cursor + off;
+    if (U.br_cursor >= 0 && cur_child < (int)n) {
+        lv_obj_scroll_to_view(lv_obj_get_child(U.lib_list, cur_child), LV_ANIM_ON);
     }
+}
+
+// Library sor tap: parent (user_data -1) → fel egy szint; egyébként az adott
+// entry aktiválása (mappa → belép; fájl → album-load + play + Now Playing).
+static void lib_row_click(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target_obj(e));
+    if (idx < 0) player_browser_up();
+    else         player_browser_tap(idx);
 }
 
 static void browser_rebuild_list(void)
 {
     if (!U.lib_list) return;
     lv_obj_clean(U.lib_list);
+
+    // Parent ".." sor, ha nem gyökérben vagyunk (UI-only, user_data = -1).
+    if (s_lib_show_parent) {
+        lv_obj_t *pbtn = lv_list_add_button(U.lib_list, LV_SYMBOL_DIRECTORY, "..");
+        lv_obj_set_style_border_width(pbtn, 0, LV_PART_MAIN);
+        lv_obj_set_style_text_color(pbtn, COL_ACCENT, LV_PART_MAIN);
+        lv_obj_set_user_data(pbtn, (void *)(intptr_t)-1);
+        lv_obj_add_event_cb(pbtn, lib_row_click, LV_EVENT_CLICKED, NULL);
+    }
+
     if (!U.br_entries || U.br_count == 0) {
         lv_obj_t *empty = lv_list_add_text(U.lib_list, "(empty)");
         lv_obj_set_style_text_color(empty, COL_TEXT_DIM, 0);
@@ -685,7 +716,9 @@ static void browser_rebuild_list(void)
         // Mappa = folder ikon, fájl = audio ikon
         const char *icon = U.br_entries[i].is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_AUDIO;
         lv_obj_t *btn = lv_list_add_button(U.lib_list, icon, U.br_entries[i].name);
-        (void)btn;
+        lv_obj_set_style_border_width(btn, 0, LV_PART_MAIN);   // divider-csík ki
+        lv_obj_set_user_data(btn, (void *)(intptr_t)i);
+        lv_obj_add_event_cb(btn, lib_row_click, LV_EVENT_CLICKED, NULL);
     }
     browser_apply_cursor();
 }
@@ -780,6 +813,8 @@ void ui_browser_show(const char *path, const dir_entry_t *entries,
     U.br_entries = entries;
     U.br_count   = count;
     U.br_cursor  = cursor;
+    // Parent ".." sor csak ha nem a gyökérben vagyunk (pontos egyezés kell).
+    s_lib_show_parent = (strcmp(path, SD_MOUNT_POINT) != 0);
     if (U.lib_path) {
         // A /sdcard prefixet elhagyjuk, hogy rövidebb legyen; gyökérnél "/"
         const char *disp = path;

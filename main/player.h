@@ -28,3 +28,9 @@ void player_do_action(player_action_t a);
 // Egy track lejátszása album-indexszel (Now Playing track-lista tap). Ha az
 // idx már a játszó track és megy → no-op. Alvó kijelzőn csak ébreszt.
 void player_play_index(int idx);
+
+// Library tap: az adott entry aktiválása (mappa → belép; fájl → album-load +
+// play + Now Playing). A ".." parent sor a player_browser_up()-ot hívja.
+// Mindkettő alvó kijelzőn csak ébreszt.
+void player_browser_tap(int idx);
+void player_browser_up(void);
