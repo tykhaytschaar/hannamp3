@@ -83,6 +83,16 @@ void player_set_backlight(uint8_t pct)
     persist_set_i32("bl_pct", (int32_t)pct);
 }
 
+// Hangerő: alkalmazás (audio + UI/header chip + slider) + NVS-mentés. A Settings
+// volume slider release-e hívja; boot-kor a player_start olvassa vissza.
+void player_set_volume(uint8_t vol)
+{
+    if (vol > 100) vol = 100;
+    audio_set_volume(vol);
+    ui_set_volume(vol);
+    persist_set_i32("volume", (int32_t)vol);
+}
+
 static void browser_refresh(void)
 {
     // FONTOS: itt NINCS NVS-írás. Régen minden mappa-navigáció persist_set_str-t
@@ -297,14 +307,10 @@ void player_handle_button(btn_event_t evt)
     }
 
     case BTN_EVT_MENU:
-        // Rövid nyomás: nincs funkció — a képernyőváltás touch swipe-ra
-        // került (lásd ui.c screen_gesture_cb). A MENU button csak long
-        // press-re reagál (lásd alább).
-        break;
-
     case BTN_EVT_MENU_LONG:
-        // Hosszú nyomás: az aktuális böngészett könyvtár újraolvasása.
-        browser_refresh();
+        // A MENU gombnak nincs UI-funkciója: a képernyőváltás touch swipe-ra
+        // került, a mappa-újraolvasás megszűnt. A gomb csak deep sleep
+        // wake-forrás (RTC GPIO 1, lásd main.c).
         break;
 
     case BTN_EVT_VOL_UP:
@@ -446,8 +452,12 @@ void player_start(void)
     ui_set_locked(io_is_locked());   // induló állapot a header ikonon
 
     // UI alapállapot
-    audio_set_volume(70);
-    ui_set_volume(70);
+    int32_t saved_vol = 70;
+    if (persist_get_i32("volume", &saved_vol)) {
+        if (saved_vol < 0 || saved_vol > 100) saved_vol = 70;
+    }
+    audio_set_volume((uint8_t)saved_vol);
+    ui_set_volume((uint8_t)saved_vol);
     uint16_t mv = io_read_battery_mv();
     ui_set_battery(mv, io_battery_percent_from_mv(mv));
 

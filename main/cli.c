@@ -69,9 +69,16 @@ static void cli_dispatch(const char *cmd, const char *param)
     } else if (strcmp(cmd, "prev") == 0) {
         ESP_LOGI(TAG, "prev");
         player_handle_button(BTN_EVT_PREV);
-    } else if (strcmp(cmd, "menu") == 0) {
-        ESP_LOGI(TAG, "menu");
-        player_handle_button(BTN_EVT_MENU);
+    } else if (strcmp(cmd, "screen") == 0) {
+        if (strcmp(param, "next") == 0) {
+            ESP_LOGI(TAG, "screen next");
+            ui_next_screen();
+        } else if (strcmp(param, "prev") == 0) {
+            ESP_LOGI(TAG, "screen prev");
+            ui_prev_screen();
+        } else {
+            ESP_LOGW(TAG, "screen: unknown param '%s' (use next/prev)", param);
+        }
     } else if (strcmp(cmd, "vol") == 0) {
         if (strcmp(param, "up") == 0) {
             ESP_LOGI(TAG, "vol up");

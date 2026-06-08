@@ -106,6 +106,8 @@ typedef struct {
     lv_obj_t *set_val_battery;
     lv_obj_t *set_val_idle;
     lv_obj_t *set_val_sleep;
+    lv_obj_t *set_sld_volume;     // Settings volume slider
+    lv_obj_t *set_sld_backlight;  // Settings brightness slider
     // Settings widgets — szerkeszthető sorok (kurzor + edit highlight ide kerül)
     lv_obj_t *set_row[UI_SETTING_COUNT];   // [VOLUME], [IDLE_TIMEOUT]
 
@@ -205,7 +207,10 @@ void ui_init(void)
 
     // ---- LVGL port ----
     lvgl_port_cfg_t lvgl_cfg = ESP_LVGL_PORT_INIT_CONFIG();
-    lvgl_cfg.task_stack = 8192;
+    // 16 KB: a 8 KB kevés volt — a Now Playing teljes-albumos track-listájának
+    // görgetése mély render/layout hívásláncot csinál → stack overflow a
+    // taskLVGL-ben. 16 KB bőven fedi.
+    lvgl_cfg.task_stack = 16384;
     lvgl_cfg.task_affinity = 0;
     ESP_ERROR_CHECK(lvgl_port_init(&lvgl_cfg));
 
@@ -566,6 +571,79 @@ static void build_library(void)
 // -----------------------------------------------------------------------------
 // Screen 3: Settings — read-only status panel
 // -----------------------------------------------------------------------------
+// Volume slider: drag közben realtime (NEM perzisztál — a mid-drag flash-írás
+// megakasztaná az audiót), elengedéskor NVS-mentés.
+static void sld_volume_cb(lv_event_t *e)
+{
+    lv_obj_t *sld = lv_event_get_target_obj(e);
+    int v = lv_slider_get_value(sld);
+    if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
+        audio_set_volume((uint8_t)v);
+        ui_set_volume((uint8_t)v);             // header chip + value label
+        s_set_cursor = UI_SETTING_VOLUME;
+        settings_render_cursor_locked();
+    } else {  // LV_EVENT_RELEASED
+        player_set_volume((uint8_t)v);         // perzisztens
+    }
+}
+
+// Brightness slider: drag közben realtime fényerő, elengedéskor NVS-mentés.
+static void sld_backlight_cb(lv_event_t *e)
+{
+    lv_obj_t *sld = lv_event_get_target_obj(e);
+    int v = lv_slider_get_value(sld);
+    if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
+        ui_set_backlight((uint8_t)v);
+        s_set_cursor = UI_SETTING_BACKLIGHT;
+        settings_render_cursor_locked();
+    } else {  // LV_EVENT_RELEASED
+        player_set_backlight((uint8_t)v);      // perzisztens
+    }
+}
+
+// Settings sor sliderrel: bal label (fix szélesség, hogy a sliderek igazodjanak)
+// + flex-grow slider + jobb érték-label.
+static lv_obj_t *settings_slider_row(lv_obj_t *parent, const char *icon,
+                                     const char *label, int32_t init_val,
+                                     lv_event_cb_t cb,
+                                     lv_obj_t **out_slider, lv_obj_t **out_value)
+{
+    lv_obj_t *row = lv_obj_create(parent);
+    lv_obj_remove_style_all(row);
+    lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+    lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
+                          LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_ver(row, 2, LV_PART_MAIN);
+    lv_obj_set_style_pad_column(row, 10, LV_PART_MAIN);
+
+    lv_obj_t *left = lv_label_create(row);
+    char buf[64];
+    if (icon && *icon) snprintf(buf, sizeof(buf), "%s  %s", icon, label);
+    else               snprintf(buf, sizeof(buf), "%s", label);
+    lv_label_set_text(left, buf);
+    lv_obj_set_width(left, 120);              // fix → a sliderek egy vonalban
+    lv_obj_set_style_text_color(left, COL_TEXT_DIM, 0);
+
+    lv_obj_t *sld = lv_slider_create(row);
+    lv_obj_set_flex_grow(sld, 1);
+    lv_slider_set_range(sld, 0, 100);
+    lv_slider_set_value(sld, init_val, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(sld, COL_BG_PANEL_2, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(sld, COL_ACCENT, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_color(sld, COL_ACCENT, LV_PART_KNOB);
+    lv_obj_add_event_cb(sld, cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(sld, cb, LV_EVENT_RELEASED, NULL);
+    if (out_slider) *out_slider = sld;
+
+    lv_obj_t *val = lv_label_create(row);
+    lv_obj_set_width(val, 50);
+    lv_label_set_text_fmt(val, "%d%%", (int)init_val);
+    lv_obj_set_style_text_color(val, COL_TEXT, 0);
+    if (out_value) *out_value = val;
+    return row;
+}
+
 static lv_obj_t *settings_row(lv_obj_t *parent, const char *icon, const char *label,
                               lv_obj_t **out_value)
 {
@@ -617,15 +695,19 @@ static void build_settings(void)
 
     settings_row(panel, LV_SYMBOL_BATTERY_FULL, "Battery", &U.set_val_battery);
 
+    // Kezdőérték placeholder (70) — a player_start ui_set_volume(saved)-del
+    // szinkronizálja. FONTOS: itt NEM hívunk audio_get_volume()-ot, mert az
+    // s_status_mux-ot venné, amit csak a később futó audio_init hoz létre.
     U.set_row[UI_SETTING_VOLUME] =
-        settings_row(panel, LV_SYMBOL_VOLUME_MAX, "Volume",  &U.set_val_volume);
+        settings_slider_row(panel, LV_SYMBOL_VOLUME_MAX, "Volume", 70,
+                            sld_volume_cb, &U.set_sld_volume, &U.set_val_volume);
     U.set_row[UI_SETTING_BACKLIGHT] =
-        settings_row(panel, NULL, "Brightness", &U.set_val_backlight);
+        settings_slider_row(panel, NULL, "Brightness", s_bl_percent,
+                            sld_backlight_cb, &U.set_sld_backlight, &U.set_val_backlight);
     U.set_row[UI_SETTING_IDLE_TIMEOUT] =
         settings_row(panel, NULL, "Display off", &U.set_val_idle);
     U.set_row[UI_SETTING_SLEEP] =
         settings_row(panel, NULL, "Sleep", &U.set_val_sleep);
-    if (U.set_val_backlight) lv_label_set_text_fmt(U.set_val_backlight, "%u%%", s_bl_percent);
     if (U.set_val_idle)  idle_label_refresh_locked();   // induló érték kiírása
     if (U.set_val_sleep) lv_label_set_text(U.set_val_sleep, s_sleep_enabled ? "On" : "Off");
 
@@ -686,11 +768,18 @@ static void browser_apply_cursor(void)
 
 // Library sor tap: parent (user_data -1) → fel egy szint; egyébként az adott
 // entry aktiválása (mappa → belép; fájl → album-load + play + Now Playing).
+// Mint a track listánál: a művelet újraépíti a lib_list-et (lv_obj_clean),
+// ezért lv_async_call-lal halasztjuk az esemény-feldolgozáson kívülre.
+static void lib_act_async(void *p)
+{
+    int idx = (int)(intptr_t)p;
+    if (idx < 0) player_browser_up();
+    else         player_browser_tap(idx);
+}
 static void lib_row_click(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target_obj(e));
-    if (idx < 0) player_browser_up();
-    else         player_browser_tap(idx);
+    lv_async_call(lib_act_async, (void *)(intptr_t)idx);
 }
 
 static void browser_rebuild_list(void)
@@ -723,11 +812,19 @@ static void browser_rebuild_list(void)
     browser_apply_cursor();
 }
 
-// Track lista sor tap → az adott album-index lejátszása.
+// Track lista sor tap → az adott album-index lejátszása. A tényleges műveletet
+// lv_async_call-lal HALASZTJUK: a player_play_index újraépíti a listát
+// (lv_obj_clean), ami a click-esemény forrás-gombját is törli — ezt tilos a
+// saját eseménye közben tenni (use-after-free / fagyás). Async → a következő
+// LVGL tickben fut, már az esemény-feldolgozáson kívül.
+static void np_play_async(void *p)
+{
+    player_play_index((int)(intptr_t)p);
+}
 static void np_tlist_click(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target_obj(e));
-    player_play_index(idx);
+    lv_async_call(np_play_async, (void *)(intptr_t)idx);
 }
 
 static void update_mini_playlist(void)
@@ -932,6 +1029,7 @@ void ui_set_backlight(uint8_t pct)
     s_bl_percent = pct;
     if (!s_disp_off) backlight_apply();   // ha alszik a kijelző, csak tároljuk
     if (U.set_val_backlight) lv_label_set_text_fmt(U.set_val_backlight, "%u%%", pct);
+    if (U.set_sld_backlight) lv_slider_set_value(U.set_sld_backlight, pct, LV_ANIM_OFF);
     lvgl_port_unlock();
 }
 
@@ -1033,44 +1131,23 @@ int ui_cycle_idle_timeout(int dir)
 //             így a szöveg ugyanott marad mint kurzor nélkül; a csík és a
 //             szöveg közt ~9 px térköz)
 //   - edit:   teljes COL_ACCENT háttér, fekete szöveg — maximális kontraszt
+// Touch-átállás óta nincs edit-mód: a kurzor csak vizuális (a legutóbb
+// érintett soron egy 3px bal accent-csík). Nincs gyerek-átszínezés, így a
+// slider sorokra (3 gyerek) is biztonságos.
 static void settings_render_cursor_locked(void)
 {
     for (int i = 0; i < UI_SETTING_COUNT; i++) {
         lv_obj_t *row = U.set_row[i];
         if (!row) continue;
-        bool is_cursor = (i == s_set_cursor);
-        bool is_edit   = is_cursor && s_set_editing;
-
-        // A row első gyermeke a left label, második a value label.
-        lv_obj_t *left = lv_obj_get_child(row, 0);
-        lv_obj_t *val  = lv_obj_get_child(row, 1);
-
-        if (is_edit) {
-            lv_obj_set_style_bg_color(row, COL_ACCENT, 0);
-            lv_obj_set_style_bg_opa(row, LV_OPA_COVER, 0);
-            lv_obj_set_style_radius(row, 4, 0);
-            lv_obj_set_style_border_width(row, 0, 0);
-            lv_obj_set_style_pad_left(row, 12, 0);
-            lv_obj_set_style_pad_right(row, 12, 0);
-            if (left) lv_obj_set_style_text_color(left, COL_BG, 0);
-            if (val)  lv_obj_set_style_text_color(val,  COL_BG, 0);
-        } else if (is_cursor) {
-            lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
+        if (i == s_set_cursor) {
             lv_obj_set_style_border_color(row, COL_ACCENT, 0);
             lv_obj_set_style_border_width(row, 3, 0);
             lv_obj_set_style_border_side(row, LV_BORDER_SIDE_LEFT, 0);
             lv_obj_set_style_radius(row, 4, 0);
             lv_obj_set_style_pad_left(row, 9, 0);   // 3 + 9 = 12 a tartalomig
-            lv_obj_set_style_pad_right(row, 0, 0);
-            if (left) lv_obj_set_style_text_color(left, COL_TEXT_DIM, 0);
-            if (val)  lv_obj_set_style_text_color(val,  COL_TEXT, 0);
         } else {
-            lv_obj_set_style_bg_opa(row, LV_OPA_TRANSP, 0);
             lv_obj_set_style_border_width(row, 0, 0);
             lv_obj_set_style_pad_left(row, 12, 0);
-            lv_obj_set_style_pad_right(row, 0, 0);
-            if (left) lv_obj_set_style_text_color(left, COL_TEXT_DIM, 0);
-            if (val)  lv_obj_set_style_text_color(val,  COL_TEXT, 0);
         }
     }
 }
@@ -1164,6 +1241,7 @@ void ui_set_volume(uint8_t vol)
     snprintf(s, sizeof(s), "%s %u%%", sym, vol);
     if (U.ovr_volume)     lv_label_set_text(U.ovr_volume, s);   // header chip
     if (U.set_val_volume) lv_label_set_text_fmt(U.set_val_volume, "%u%%", vol);
+    if (U.set_sld_volume) lv_slider_set_value(U.set_sld_volume, vol, LV_ANIM_OFF);
     // A header chip pozíciója a battery szélességéhez igazodik (változhat a %).
     if (U.ovr_volume && U.ovr_battery)
         lv_obj_align_to(U.ovr_volume, U.ovr_battery, LV_ALIGN_OUT_LEFT_MID, -14, 0);

@@ -15,6 +15,10 @@ void player_handle_button(btn_event_t evt);
 // A Settings-edit és a CLI `bl` parancs is ezt hívja → perzisztens.
 void player_set_backlight(uint8_t pct);
 
+// Hangerő (0–100%): alkalmazza (audio + UI) és NVS-be menti. A Settings volume
+// slider release-e hívja; boot-kor a player_start olvassa vissza (default 70).
+void player_set_volume(uint8_t vol);
+
 // Now Playing transport gombok (touch). A 4 akció a fizikai gombok útjára
 // képződik le; a STOP új (audio_stop + UI reset). Alvó kijelzőn csak ébreszt.
 typedef enum {
