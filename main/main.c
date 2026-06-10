@@ -116,6 +116,13 @@ void app_main(void)
     // Sorrend fontos: SD a SPI buszt is inicializálja, amit az UI újrahasznosít.
     sd_init();
     ui_init();
+
+    // Boot splash: a flash-be ágyazott frame-szett lejátszása. Itt, a
+    // player_start (SD-szkennelés) ELŐTT fut, így a flash-ből dekódolt
+    // frame-ek kirajzolása sosem esik egybe SD-olvasással. Az utolsó frame
+    // kint marad, amíg az ui_display_ready le nem cseréli a kész UI-ra.
+    ui_play_boot_splash();
+
     audio_init();
     io_init();
 

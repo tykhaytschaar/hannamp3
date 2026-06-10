@@ -7,6 +7,13 @@
 // LVGL + ST7796 init. A háttérvilágítás boot alatt OFF marad.
 void ui_init(void);
 
+// Boot splash lejátszása: a firmware-be ágyazott JPEG frame-szett ("videó").
+// Az ui_init UTÁN, de a player_start (SD-szkennelés) ELŐTT hívandó — a
+// frame-ek flash-ből jönnek, így nincs SD-olvasás a kirajzolással egy időben.
+// Az utolsó frame a képernyőn marad, amíg az ui_display_ready le nem cseréli a
+// kész UI-ra. A háttérvilágítást az első frame után maga kapcsolja fel.
+void ui_play_boot_splash(void);
+
 // A teljes init után (player_start lefutott, tartalom betöltve) hívd: a UI-t
 // azonnal kirajzoltatja, megvárja a flush-t, majd felkapcsolja a
 // háttérvilágítást — így a boot-kori fehér flash + üres fázis nem látszik.

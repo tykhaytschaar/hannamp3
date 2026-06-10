@@ -23,6 +23,7 @@
 #include "ui.h"
 #include "player.h"   // player_do_action / player_play_index (touch transport)
 #include "mp3_fonts.h"
+#include "boot_splash.h"
 
 static const char *TAG = "ui";
 
@@ -53,6 +54,21 @@ static int64_t                s_last_activity_us = 0;
 // mentett-fényerő visszaállítása csak tárol — a tényleges felkapcsolás az
 // ui_display_ready-ben történik, a tartalom betöltése után.
 static bool                   s_disp_off = true;
+
+// Boot splash állapota. A splash külön (a valódi képernyők felett) screen-en
+// fut; az utolsó frame kint marad, amíg az ui_display_ready le nem cseréli a
+// kész UI-ra és fel nem szabadítja ezeket.
+static lv_obj_t       *s_splash_scr = NULL;   // splash képernyő
+static uint8_t        *s_splash_buf = NULL;   // RGB888 dekód-buffer (PSRAM)
+static lv_image_dsc_t  s_splash_dsc;          // a frame-et LVGL-nek leíró dsc
+// Amíg a splash aktív (a lejátszástól a kész UI-ra váltásig), a háttér-
+// világítás FIX 100% — a beállított fényerő csak tárolódik (s_bl_percent), és
+// az ui_display_ready alkalmazza, amikor a kész UI kikerül. Így a kimerevített
+// utolsó frame nem halványul el, ha a mentett fényerő < 100%.
+static bool            s_splash_active = false;
+// Frame-tempó cél: a tényleges sebesség max(dekód+flush, ennyi). 33 ms ≈ 30 fps
+// felső korlát; a dekód jellemzően ennél lassabb, így ez ritkán fékez.
+#define BOOT_SPLASH_FRAME_MS  33
 
 // Háttérvilágítás PWM (LEDC). A GPIO 16-ot duty-val hajtjuk: 0 = sötét,
 // max = teljes fényerő. A beállított fényerő százalékban (boot: 100%);
@@ -1029,27 +1045,149 @@ void ui_set_state(audio_state_t st)
 // miatt le van kapcsolva (s_disp_off), a duty 0; különben a beállított %.
 static void backlight_apply(void)
 {
-    uint32_t max  = (1u << BL_LEDC_RES_BITS) - 1u;
-    uint32_t duty = s_disp_off ? 0u : (max * s_bl_percent) / 100u;
+    uint32_t max = (1u << BL_LEDC_RES_BITS) - 1u;
+    // Splash alatt fix 100% — a mentett fényerő csak az ui_display_ready-ben lép
+    // életbe, hogy a kimerevített utolsó frame ne halványuljon el.
+    uint32_t pct  = s_splash_active ? 100u : s_bl_percent;
+    uint32_t duty = s_disp_off ? 0u : (max * pct) / 100u;
     ledc_set_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL, duty);
     ledc_update_duty(BL_LEDC_MODE, BL_LEDC_CHANNEL);
 }
 
+// -----------------------------------------------------------------------------
+// Boot splash — a firmware-be ágyazott JPEG frame-szett lejátszása cold boot-kor.
+// Az ui_init UTÁN, de a player_start (SD-szkennelés) ELŐTT hívandó: a frame-ek
+// flash-ből jönnek, így NINCS SD-olvasás a kirajzolással egy időben (a közös
+// SPI buszon nem ütköznek). A frame-eket az esp_new_jpeg dekódolja RGB888-ba,
+// majd egy teljes képernyős lv_image rajzolja ki — a szín/tájolás az LVGL +
+// panel pipeline-on garantáltan helyes (ugyanaz az út, mint az album-artnál).
+//
+// Az utolsó frame a képernyőn marad (a háttérvilágítás bekapcsolva), amíg az
+// ui_display_ready le nem cseréli a kész UI-ra. A háttérvilágítást az első
+// sikeresen kirajzolt frame után kapcsoljuk fel — így a panel power-on fehér
+// flash-e és az üres fázis rejtve marad, ahogy eddig is.
+// -----------------------------------------------------------------------------
+void ui_play_boot_splash(void)
+{
+    int n = boot_splash_frame_count();
+    if (n <= 0 || !s_disp) return;
+
+    const int buflen = BOOT_SPLASH_W * BOOT_SPLASH_H * 3;   // RGB888
+    // 16-byte igazítás az esp_new_jpeg kimenetéhez; PSRAM-ból (460 KB).
+    s_splash_buf = heap_caps_aligned_alloc(16, buflen, MALLOC_CAP_SPIRAM);
+    if (!s_splash_buf) {
+        ESP_LOGW(TAG, "boot splash: %d B buffer alloc failed — kihagyva", buflen);
+        return;
+    }
+
+    // Splash alatt fix 100% háttérvilágítás (lásd backlight_apply); a mentett
+    // fényerőt a player_start csak eltárolja, az ui_display_ready alkalmazza.
+    s_splash_active = true;
+
+    memset(&s_splash_dsc, 0, sizeof(s_splash_dsc));
+    s_splash_dsc.header.magic  = LV_IMAGE_HEADER_MAGIC;
+    s_splash_dsc.header.cf     = LV_COLOR_FORMAT_RGB888;
+    s_splash_dsc.header.w      = BOOT_SPLASH_W;
+    s_splash_dsc.header.h      = BOOT_SPLASH_H;
+    s_splash_dsc.header.stride = BOOT_SPLASH_W * 3;
+    s_splash_dsc.data          = s_splash_buf;
+    s_splash_dsc.data_size     = buflen;
+
+    lvgl_port_lock(0);
+    // Az overlay (battery/volume/lock) a lv_layer_top()-on van, ami MINDEN
+    // screen fölé rajzol — a splash idejére elrejtjük, az ui_display_ready
+    // hozza vissza.
+    lv_obj_add_flag(lv_layer_top(), LV_OBJ_FLAG_HIDDEN);
+
+    s_splash_scr = lv_obj_create(NULL);
+    lv_obj_set_style_bg_color(s_splash_scr, lv_color_black(), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_splash_scr, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(s_splash_scr, 0, LV_PART_MAIN);
+    lv_obj_remove_flag(s_splash_scr, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *img = lv_image_create(s_splash_scr);
+    lv_obj_set_pos(img, 0, 0);
+    lv_image_set_src(img, &s_splash_dsc);
+    lv_screen_load(s_splash_scr);
+    lvgl_port_unlock();
+
+    bool bl_on = false;
+    for (int i = 0; i < n; i++) {
+        int64_t t0 = esp_timer_get_time();
+        if (!boot_splash_decode_rgb888(i, s_splash_buf, buflen)) continue;
+
+        lvgl_port_lock(0);
+        // A dsc data-ja ugyanaz a buffer, csak a tartalma változott — a cache-t
+        // eldobjuk, hogy a friss frame jelenjen meg, és kikényszerítjük a redraw-t.
+        lv_image_cache_drop(&s_splash_dsc);
+        lv_obj_invalidate(img);
+        lv_refr_now(s_disp);
+        lvgl_port_unlock();
+
+        if (!bl_on) {
+            // Első frame kint van — DMA settle, majd háttérvilágítás fel.
+            vTaskDelay(pdMS_TO_TICKS(40));
+            s_disp_off = false;
+            backlight_apply();
+            bl_on = true;
+        }
+
+        int wait = BOOT_SPLASH_FRAME_MS - (int)((esp_timer_get_time() - t0) / 1000);
+        if (wait > 0) vTaskDelay(pdMS_TO_TICKS(wait));
+    }
+    ESP_LOGI(TAG, "boot splash done (%d frames)", n);
+    // Az utolsó frame kint marad; a takarítást az ui_display_ready végzi.
+}
+
 void ui_display_ready(void)
 {
-    // A boot alatt a backlight végig OFF volt (lásd ui_init + main.c). Ekkorra
-    // a player_start betöltötte a valódi tartalmat — kirajzoltatjuk azonnal,
-    // megvárjuk a flush DMA kifutását, és csak ezután kapcsoljuk fel a
-    // háttérvilágítást, így a fehér flash + üres placeholder fázis rejtve marad.
+    bool had_splash = (s_splash_scr != NULL);
+
+    // Splash után: a valódi UI-t a player_start már feltöltötte (a háttér-
+    // screen-ek widgetjeibe). Lecseréljük a splash-t a kész képernyőre, és
+    // visszahozzuk az overlay-t. A háttérvilágítás ilyenkor még a splash
+    // fix 100%-án ég — az utolsó frame → kész UI váltás után kapcsolunk a
+    // beállított fényerőre.
+    if (had_splash && lvgl_port_lock(200)) {
+        lv_obj_remove_flag(lv_layer_top(), LV_OBJ_FLAG_HIDDEN);
+        lv_screen_load(U.scr[U.current]);
+        lvgl_port_unlock();
+    }
+
+    // Kész UI kirajzoltatása + flush bevárása. (A teljes 480×320 flush ~31 ms
+    // @ 80 MHz.) Így a fehér flash / üres placeholder fázis rejtve marad.
     if (s_disp && lvgl_port_lock(200)) {
         lv_refr_now(s_disp);
         lvgl_port_unlock();
     }
-    // A teljes 480×320 flush ~31 ms @ 80 MHz; 50 ms bőven fedi a DMA kifutását.
-    vTaskDelay(pdMS_TO_TICKS(50));
-    s_disp_off = false;
-    backlight_apply();                           // a beállított fényerőre
+
+    if (had_splash) {
+        // A kész UI kint van — most lép életbe a beállított fényerő (a splash
+        // és a kimerevített utolsó frame végig fix 100%-on volt).
+        s_splash_active = false;
+        backlight_apply();
+    } else {
+        // Hidegindítás splash nélkül: a backlight eddig OFF volt — flush DMA
+        // bevárása, majd felkapcsolás a beállított fényerőre.
+        vTaskDelay(pdMS_TO_TICKS(50));
+        s_disp_off = false;
+        backlight_apply();
+    }
     s_last_activity_us = esp_timer_get_time();   // idle-számláló nullázása
+
+    // Splash erőforrások felszabadítása — a kész UI már kint van. A cache-ből
+    // is dobjuk a dsc-t, mielőtt a buffert felszabadítjuk (különben dangling).
+    if (s_splash_scr) {
+        lvgl_port_lock(0);
+        lv_image_cache_drop(&s_splash_dsc);
+        lv_obj_delete(s_splash_scr);
+        s_splash_scr = NULL;
+        lvgl_port_unlock();
+    }
+    if (s_splash_buf) {
+        heap_caps_free(s_splash_buf);
+        s_splash_buf = NULL;
+    }
 }
 
 void ui_set_backlight(uint8_t pct)

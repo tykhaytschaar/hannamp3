@@ -1,3 +1,9 @@
+# Boot splash frame-ek: az assets/boot/frame_NNN.jpg-ket a binárisba ágyazzuk
+# (EMBED_FILES). Az embed-sorrend lényegtelen — a szimbólumnevek a basename-ből
+# jönnek (_binary_frame_NNN_jpg_start/_end), a lejátszási sorrendet a
+# boot_splash.c s_frames[] táblája rögzíti.
+file(GLOB BOOT_SPLASH_FRAMES "${CMAKE_CURRENT_SOURCE_DIR}/../assets/boot/frame_*.jpg")
+
 idf_component_register(
     SRCS
         "main.c"
@@ -7,6 +13,7 @@ idf_component_register(
         "io.c"
         "player.c"
         "cli.c"
+        "boot_splash.c"
         "fonts/mp3_inter_12.c"
         "fonts/mp3_inter_14.c"
         "fonts/mp3_inter_18.c"
@@ -24,4 +31,6 @@ idf_component_register(
         fatfs
         sdmmc
         nvs_flash
+        esp_new_jpeg
+    EMBED_FILES ${BOOT_SPLASH_FRAMES}
 )
