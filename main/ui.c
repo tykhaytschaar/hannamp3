@@ -1215,7 +1215,16 @@ void ui_display_ready(void)
 // USB MSC mód kijelző — egy statikus "USB Storage Mode" képernyő. A custom
 // fontok szimbólum-tartománya nem tartalmaz USB-ikont (0xF287), ezért csak
 // szöveg. Az overlay-t (battery/volume/lock) elrejtjük, ahogy a splash-nél.
+//
+// Az "Exit" gomb CSAK vizuális: MSC alatt az LVGL fagyasztva van (nem futnak
+// az indev/click eventek), ezért az érintést az usb_msc_run pollozza
+// közvetlenül a touch driverből (ui_usb_exit_touched — az FT6336 külön I2C
+// buszon van, nem érinti a közös SPI-t). A gomb képernyő-koordinátáit itt
+// tároljuk el a hit-teszthez.
 // -----------------------------------------------------------------------------
+static lv_area_t s_usb_exit_area;          // Exit gomb képernyő-koordinátái
+static bool      s_usb_exit_valid = false;
+
 void ui_show_usb_mode_screen(bool have_card)
 {
     lvgl_port_lock(0);
@@ -1224,33 +1233,59 @@ void ui_show_usb_mode_screen(bool have_card)
     lv_obj_t *scr = lv_obj_create(NULL);
     apply_screen_bg(scr);   // sötét háttér + no-scroll + default font
 
-    lv_obj_t *col = lv_obj_create(scr);
-    lv_obj_remove_style_all(col);
-    lv_obj_set_size(col, 440, LV_SIZE_CONTENT);
-    lv_obj_center(col);
-    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
-    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_row(col, 12, LV_PART_MAIN);
-
-    lv_obj_t *title = lv_label_create(col);
+    lv_obj_t *title = lv_label_create(scr);
     lv_obj_set_style_text_font(title, &mp3_inter_24, 0);
     lv_obj_set_style_text_color(title, COL_ACCENT, 0);
     lv_label_set_text(title, "USB Storage Mode");
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, -78);
 
-    lv_obj_t *sub = lv_label_create(col);
+    lv_obj_t *sub = lv_label_create(scr);
     lv_obj_set_style_text_font(sub, &mp3_inter_14, 0);
     lv_obj_set_style_text_color(sub, COL_TEXT_DIM, 0);
-    lv_label_set_long_mode(sub, LV_LABEL_LONG_WRAP);
-    lv_obj_set_width(sub, 420);
     lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(sub, have_card
-        ? "Az SD kártya a számítógépen meghajtóként elérhető.\n"
-          "Kilépés: kapcsold ki-be az eszközt."
-        : "Nincs SD kártya.\n"
-          "Kilépés: kapcsold ki-be az eszközt.");
+        ? "Eject the drive on your computer before exit."
+        : "No SD card.");
+    lv_obj_align(sub, LV_ALIGN_CENTER, 0, -34);
+
+    // Exit gomb (vizuális — lásd a fenti blokk-kommentet)
+    lv_obj_t *btn = lv_obj_create(scr);
+    lv_obj_remove_style_all(btn);
+    lv_obj_set_size(btn, 180, 56);
+    lv_obj_align(btn, LV_ALIGN_CENTER, 0, 56);
+    lv_obj_set_style_bg_color(btn, COL_ACCENT, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(btn, 8, LV_PART_MAIN);
+    lv_obj_t *bl = lv_label_create(btn);
+    lv_obj_set_style_text_font(bl, &mp3_inter_18, 0);
+    lv_obj_set_style_text_color(bl, COL_BG, 0);
+    lv_label_set_text(bl, "Exit");
+    lv_obj_center(bl);
 
     lv_screen_load(scr);
+    // Layout kiszámoltatása, hogy a gomb végleges koordinátáit eltehessük a
+    // touch hit-teszthez; +12 px kényelmi margó a tap-célnak.
+    lv_obj_update_layout(scr);
+    lv_obj_get_coords(btn, &s_usb_exit_area);
+    lv_area_increase(&s_usb_exit_area, 12, 12);
+    s_usb_exit_valid = true;
     lvgl_port_unlock();
+}
+
+// MSC alatt hívható (LVGL fagyasztva): közvetlenül a touch drivert olvassa
+// (I2C — a közös SPI buszt nem érinti), és igazat ad, ha az aktuális érintés
+// az Exit gomb területére esik. Az esp_lcd_touch a configban megadott
+// swap/mirror flagekkel már LVGL-koordinátát ad vissza.
+bool ui_usb_exit_touched(void)
+{
+    if (!s_touch || !s_usb_exit_valid) return false;
+    esp_lcd_touch_read_data(s_touch);
+    uint16_t x, y;
+    uint8_t cnt = 0;
+    if (!esp_lcd_touch_get_coordinates(s_touch, &x, &y, NULL, &cnt, 1) || cnt == 0)
+        return false;
+    return x >= s_usb_exit_area.x1 && x <= s_usb_exit_area.x2 &&
+           y >= s_usb_exit_area.y1 && y <= s_usb_exit_area.y2;
 }
 
 // LVGL befagyasztása az MSC mód idejére: a port-lockot megszerezzük és NEM

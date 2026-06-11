@@ -56,36 +56,44 @@ void usb_msc_run(void)
     //    taskLVGL nem flushel többet — a közös SPI busz szabad az MSC-nek.
     ui_suspend_for_msc();
 
-    if (!card) {
-        ESP_LOGE(TAG, "nincs SD kártya — MSC nem indul");
-        while (1) vTaskDelay(portMAX_DELAY);
+    if (card) {
+        // 4) TinyUSB MSC: a kártya kitevése a hostnak írható-olvasható meghajtóként.
+        tinyusb_msc_driver_config_t driver_cfg = {
+            .callback = NULL,
+            .callback_arg = NULL,
+        };
+        ESP_ERROR_CHECK(tinyusb_msc_install_driver(&driver_cfg));
+
+        tinyusb_msc_storage_config_t storage_cfg = {
+            .medium.card = card,
+            .mount_point = TINYUSB_MSC_STORAGE_MOUNT_USB,   // a host birtokolja
+            .fat_fs = {
+                .base_path = NULL,
+                .config.max_files = 3,
+                .do_not_format = true,    // SOHA ne formázzuk a felhasználó kártyáját
+                .format_flags = 0,
+            },
+        };
+        ESP_ERROR_CHECK(tinyusb_msc_new_storage_sdmmc(&storage_cfg, NULL));
+
+        tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
+        ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
+
+        ESP_LOGI(TAG, "USB MSC aktív — SD a natív USB-n (GPIO19/20), írható-olvasható");
+    } else {
+        ESP_LOGE(TAG, "nincs SD kártya — MSC nem indul (Exit gomb él)");
     }
 
-    // 4) TinyUSB MSC: a kártya kitevése a hostnak írható-olvasható meghajtóként.
-    tinyusb_msc_driver_config_t driver_cfg = {
-        .callback = NULL,
-        .callback_arg = NULL,
-    };
-    ESP_ERROR_CHECK(tinyusb_msc_install_driver(&driver_cfg));
-
-    tinyusb_msc_storage_config_t storage_cfg = {
-        .medium.card = card,
-        .mount_point = TINYUSB_MSC_STORAGE_MOUNT_USB,   // a host birtokolja
-        .fat_fs = {
-            .base_path = NULL,
-            .config.max_files = 3,
-            .do_not_format = true,    // SOHA ne formázzuk a felhasználó kártyáját
-            .format_flags = 0,
-        },
-    };
-    ESP_ERROR_CHECK(tinyusb_msc_new_storage_sdmmc(&storage_cfg, NULL));
-
-    tinyusb_config_t tusb_cfg = TINYUSB_DEFAULT_CONFIG();
-    ESP_ERROR_CHECK(tinyusb_driver_install(&tusb_cfg));
-
-    ESP_LOGI(TAG, "USB MSC aktív — SD a natív USB-n (GPIO19/20), írható-olvasható");
-
-    // A munkát a TinyUSB task végzi; itt csak életben tartjuk a taskot (és vele
-    // az LVGL port-lockot). Kilépés: fizikai power-cycle / reset.
-    while (1) vTaskDelay(portMAX_DELAY);
+    // A munkát a TinyUSB task végzi; itt az Exit gomb érintését pollozzuk
+    // (közvetlenül a touch driverből — az LVGL fagyasztva van, az I2C touch
+    // nem érinti a közös SPI buszt). Tap → újraindulás normál módba (a flag
+    // egyszer-használatos volt, már törölve). Vagy: power-cycle / reset.
+    while (1) {
+        if (ui_usb_exit_touched()) {
+            ESP_LOGI(TAG, "Exit gomb — újraindulás normál módba");
+            vTaskDelay(pdMS_TO_TICKS(100));   // log flush
+            esp_restart();
+        }
+        vTaskDelay(pdMS_TO_TICKS(50));
+    }
 }

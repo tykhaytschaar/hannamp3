@@ -14,9 +14,14 @@ void ui_init(void);
 // kész UI-ra. A háttérvilágítást az első frame után maga kapcsolja fel.
 void ui_play_boot_splash(void);
 
-// USB MSC mód: statikus "USB Storage Mode" képernyő (have_card=false esetén
-// "nincs kártya" üzenet). Az ui_init után hívandó.
+// USB MSC mód: statikus "USB Storage Mode" képernyő Exit gombbal
+// (have_card=false esetén "No SD card" üzenet). Az ui_init után hívandó.
 void ui_show_usb_mode_screen(bool have_card);
+
+// MSC alatt (fagyasztott LVGL mellett) hívható: közvetlenül a touch driverből
+// (külön I2C busz) olvassa az érintést, és igazat ad, ha az az Exit gomb
+// területére esik. Az usb_msc_run pollozza, találatkor esp_restart().
+bool ui_usb_exit_touched(void);
 
 // LVGL befagyasztása az MSC mód idejére: a port-lockot véglegesen megtartja,
 // így a taskLVGL nem flushel a közös SPI buszra, amíg az MSC az SD-t használja.
