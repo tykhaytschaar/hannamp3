@@ -14,6 +14,7 @@ idf_component_register(
         "player.c"
         "cli.c"
         "boot_splash.c"
+        "usb_msc.c"
         "fonts/mp3_inter_12.c"
         "fonts/mp3_inter_14.c"
         "fonts/mp3_inter_18.c"
@@ -32,5 +33,6 @@ idf_component_register(
         sdmmc
         nvs_flash
         esp_new_jpeg
+        esp_tinyusb
     EMBED_FILES ${BOOT_SPLASH_FRAMES}
 )

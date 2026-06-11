@@ -14,6 +14,15 @@ void ui_init(void);
 // kész UI-ra. A háttérvilágítást az első frame után maga kapcsolja fel.
 void ui_play_boot_splash(void);
 
+// USB MSC mód: statikus "USB Storage Mode" képernyő (have_card=false esetén
+// "nincs kártya" üzenet). Az ui_init után hívandó.
+void ui_show_usb_mode_screen(bool have_card);
+
+// LVGL befagyasztása az MSC mód idejére: a port-lockot véglegesen megtartja,
+// így a taskLVGL nem flushel a közös SPI buszra, amíg az MSC az SD-t használja.
+// Hívd az "USB mód" képernyő kirajzolása + backlight után, az MSC indítása előtt.
+void ui_suspend_for_msc(void);
+
 // A teljes init után (player_start lefutott, tartalom betöltve) hívd: a UI-t
 // azonnal kirajzoltatja, megvárja a flush-t, majd felkapcsolja a
 // háttérvilágítást — így a boot-kori fehér flash + üres fázis nem látszik.

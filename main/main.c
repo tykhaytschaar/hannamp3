@@ -15,6 +15,7 @@
 #include "io.h"
 #include "player.h"
 #include "cli.h"
+#include "usb_msc.h"
 
 // Mindkét CS lábat explicit HIGH-ra húzzuk MIELŐTT a SPI master bármit
 // elkezdene csinálni. Így a köztes időben (SD init → LCD init) sem lebeg
@@ -112,6 +113,14 @@ void app_main(void)
     pre_init_cs_pins();
     pre_init_backlight_off();
     init_static_low_pins();
+
+    // USB MSC boot-ág: ha a Settings-ből ide kértek újraindulást, a normál
+    // init helyett az SD-t a natív USB-n külső meghajtóként tesszük ki.
+    // usb_msc_run() sosem tér vissza. (A flag egyszer-használatos: belépéskor
+    // törlődik, így bármilyen következő reset/power-cycle normál módba tér.)
+    if (usb_msc_boot_requested()) {
+        usb_msc_run();
+    }
 
     // Sorrend fontos: SD a SPI buszt is inicializálja, amit az UI újrahasznosít.
     sd_init();

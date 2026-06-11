@@ -24,6 +24,7 @@
 #include "player.h"   // player_do_action / player_play_index (touch transport)
 #include "mp3_fonts.h"
 #include "boot_splash.h"
+#include "usb_msc.h"  // usb_msc_request_reboot (Settings → USB Storage gomb)
 
 static const char *TAG = "ui";
 
@@ -690,6 +691,16 @@ static void sleep_row_click(lv_event_t *e)
     settings_render_cursor_locked();
 }
 
+// USB Storage sor tap → újraindulás USB MSC módba. Alvó kijelzőn csak ébreszt
+// (mint a többi akció-sor), különben usb_msc_request_reboot() — ami beállítja a
+// boot-flaget és azonnal újraindít (nem tér vissza).
+static void usb_storage_row_click(lv_event_t *e)
+{
+    (void)e;
+    if (ui_user_activity()) return;
+    usb_msc_request_reboot();   // sosem tér vissza
+}
+
 static lv_obj_t *settings_row(lv_obj_t *parent, const char *icon, const char *label,
                               lv_obj_t **out_value)
 {
@@ -760,6 +771,16 @@ static void build_settings(void)
     lv_obj_add_flag(U.set_row[UI_SETTING_SLEEP], LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(U.set_row[UI_SETTING_SLEEP], sleep_row_click,
                         LV_EVENT_CLICKED, NULL);
+
+    // USB Storage akció-sor: koppintásra újraindul USB MSC módba (az SD kártya
+    // külső meghajtóként a natív USB-n). Nem cursor-target (nincs az enum-ban).
+    {
+        lv_obj_t *usb_val = NULL;
+        lv_obj_t *usb_row = settings_row(panel, NULL, "USB Storage", &usb_val);
+        if (usb_val) lv_label_set_text(usb_val, "Tap");
+        lv_obj_add_flag(usb_row, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_add_event_cb(usb_row, usb_storage_row_click, LV_EVENT_CLICKED, NULL);
+    }
     if (U.set_val_idle)  idle_label_refresh_locked();   // induló érték kiírása
     if (U.set_val_sleep) lv_label_set_text(U.set_val_sleep, s_sleep_enabled ? "On" : "Off");
 
@@ -1188,6 +1209,59 @@ void ui_display_ready(void)
         heap_caps_free(s_splash_buf);
         s_splash_buf = NULL;
     }
+}
+
+// -----------------------------------------------------------------------------
+// USB MSC mód kijelző — egy statikus "USB Storage Mode" képernyő. A custom
+// fontok szimbólum-tartománya nem tartalmaz USB-ikont (0xF287), ezért csak
+// szöveg. Az overlay-t (battery/volume/lock) elrejtjük, ahogy a splash-nél.
+// -----------------------------------------------------------------------------
+void ui_show_usb_mode_screen(bool have_card)
+{
+    lvgl_port_lock(0);
+    lv_obj_add_flag(lv_layer_top(), LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *scr = lv_obj_create(NULL);
+    apply_screen_bg(scr);   // sötét háttér + no-scroll + default font
+
+    lv_obj_t *col = lv_obj_create(scr);
+    lv_obj_remove_style_all(col);
+    lv_obj_set_size(col, 440, LV_SIZE_CONTENT);
+    lv_obj_center(col);
+    lv_obj_set_flex_flow(col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(col, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_set_style_pad_row(col, 12, LV_PART_MAIN);
+
+    lv_obj_t *title = lv_label_create(col);
+    lv_obj_set_style_text_font(title, &mp3_inter_24, 0);
+    lv_obj_set_style_text_color(title, COL_ACCENT, 0);
+    lv_label_set_text(title, "USB Storage Mode");
+
+    lv_obj_t *sub = lv_label_create(col);
+    lv_obj_set_style_text_font(sub, &mp3_inter_14, 0);
+    lv_obj_set_style_text_color(sub, COL_TEXT_DIM, 0);
+    lv_label_set_long_mode(sub, LV_LABEL_LONG_WRAP);
+    lv_obj_set_width(sub, 420);
+    lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
+    lv_label_set_text(sub, have_card
+        ? "Az SD kártya a számítógépen meghajtóként elérhető.\n"
+          "Kilépés: kapcsold ki-be az eszközt."
+        : "Nincs SD kártya.\n"
+          "Kilépés: kapcsold ki-be az eszközt.");
+
+    lv_screen_load(scr);
+    lvgl_port_unlock();
+}
+
+// LVGL befagyasztása az MSC mód idejére: a port-lockot megszerezzük és NEM
+// engedjük el. A taskLVGL ettől kezdve blokkol a lv_timer_handler előtt
+// (esp_lvgl_port: lvgl_port_lock(0) = portMAX_DELAY), így nem flushel a közös
+// SPI buszra, amíg az MSC az SD-t használja. A lock-tulajdonos a hívó task
+// (app_main), amit az usb_msc_run életben tart.
+void ui_suspend_for_msc(void)
+{
+    lvgl_port_lock(0);
+    // szándékosan nincs unlock
 }
 
 void ui_set_backlight(uint8_t pct)

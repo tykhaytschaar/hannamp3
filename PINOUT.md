@@ -52,6 +52,12 @@ lábai, ezért nincs a 40 MHz-es GPIO-mátrix plafon. Az SD a saját órajelén 
 ugyanazon a buszon. Ha a közös buszon csíkozódás/„hó"/hibás sor van, vidd vissza
 40 MHz-re.
 
+Az **SD-órajel 10 MHz** (`sd.c`, `max_freq_khz`). A dupont-bekötés 20/40 MHz-en
+CRC-error/mount-fail volt, de 10 MHz hibamentes és ~2× gyorsabb mint a korábbi
+5 MHz (≈950 vs ≈540 KB/s). A sebesség az USB MSC módhoz kell (a macOS FSKit a
+mountkor ~20s alatt beolvassa a FAT-táblát). A `##sdtest##` CLI-paranccsal
+mérhető az olvasási sebesség és a megbízhatóság.
+
 ### Touch (FT6336) — bekötés
 
 Külön I2C busz, független a kijelző SPI-tól. Cím 0x38. Driver:

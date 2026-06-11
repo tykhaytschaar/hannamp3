@@ -62,3 +62,11 @@ CONFIG_LV_TICK_CUSTOM=y
 CONFIG_LV_FONT_MONTSERRAT_14=y
 CONFIG_LV_FONT_MONTSERRAT_18=y
 CONFIG_LV_FONT_MONTSERRAT_24=y
+
+# USB MSC mód: az SD kártya kitevése a natív USB-n (GPIO19/20) külső
+# meghajtóként. A Settings-ből indítható reboot-tal (lásd usb_msc.c).
+# A buffer 8192 (16 szektor/olvasás): a macOS (FSKit) msdos mount ~20s alatt
+# beolvassa a FAT-táblát; 512-vel (egy-szektoros olvasás) ez túllépi a 20s
+# timeoutot → "FATManager failed to init". Multi-block olvasással belefér.
+CONFIG_TINYUSB_MSC_ENABLED=y
+CONFIG_TINYUSB_MSC_BUFSIZE=8192

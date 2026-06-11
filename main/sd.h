@@ -3,6 +3,7 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "driver/spi_master.h"
+#include "sdmmc_cmd.h"
 
 #define SD_SPI_HOST  SPI2_HOST
 
@@ -23,6 +24,16 @@ typedef struct {
 // Inicializálja a közös SPI buszt + felmountolja az SD-t /sdcard alatt.
 // A spi bus host: SD_SPI_HOST — ezt használja a TFT is.
 void sd_init(void);
+
+// USB MSC módhoz: inicializálja a közös SPI buszt + az SD kártyát, de NEM
+// mountolja a FAT-ot (a host kapja a nyers blokk-hozzáférést). Visszaadja a
+// kártya-handle-t, vagy NULL-t hiba esetén. NE hívd a sd_init-tel együtt —
+// ez külön (MSC-) boot-ág.
+sdmmc_card_t *sd_init_card_raw(void);
+
+// Diagnosztika: nyers SD-olvasási sebesség mérése (multi-block / single-block /
+// random latencia), az eredményt ESP_LOG-ra írja. A CLI `sdtest` hívja.
+void sd_speed_test(void);
 
 // Beolvassa az MUSIC_DIR-ben található *.mp3 fájlokat (max MAX_TRACKS).
 // Visszaadja a beolvasott darabszámot.

@@ -7,6 +7,8 @@
 #include <dirent.h>
 
 #include "esp_log.h"
+#include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "esp_vfs_fat.h"
 #include "sdmmc_cmd.h"
 #include "driver/sdspi_host.h"
@@ -37,11 +39,13 @@ void sd_init(void)
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SD_SPI_HOST;
-    // 5 MHz: a dupont-bekötés SD-SPI olvasásnál (MISO-mintavételezés) csak
-    // ennyit bír megbízhatóan — 20/40 MHz CRC-error / mount-fail. A boot-splash
-    // sávszélét NEM az SD-órajel emelésével oldjuk (az a kártyát megbízhatatlanná
-    // teszi), hanem a frame-adat csökkentésével (lásd splash formátum).
-    host.max_freq_khz = 5000;    // 5 MHz
+    // 10 MHz: a dupont-bekötés 20/40 MHz-en CRC-error/mount-fail volt, de a
+    // 10 MHz méréssel (CLI `sdtest`) hibamentes és ~2× gyorsabb (≈950 KB/s vs
+    // 5 MHz ≈540 KB/s). A sebesség az USB MSC módhoz kell: a macOS FSKit a
+    // mountkor ~20s alatt beolvassa a (8 GB, 4 KB-cluster → ~7.6 MB) FAT-táblát,
+    // ami 5 MHz-en nem fért bele → "FATManager failed to init". 10 MHz-en igen.
+    // A track-betöltés/album-art is gyorsabb lett tőle.
+    host.max_freq_khz = 10000;   // 10 MHz
 
     sdspi_device_config_t slot_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
     slot_cfg.gpio_cs = PIN_SD_CS;
@@ -61,6 +65,129 @@ void sd_init(void)
     }
     sdmmc_card_print_info(stdout, s_card);
     ESP_LOGI(TAG, "SD mounted at %s", SD_MOUNT_POINT);
+}
+
+sdmmc_card_t *sd_init_card_raw(void)
+{
+    // Közös SPI busz (a TFT is ezt használja). Ha már inicializált (pl. nem
+    // ez fut először), az INVALID_STATE rendben van.
+    spi_bus_config_t buscfg = {
+        .mosi_io_num = PIN_SPI_MOSI,
+        .miso_io_num = PIN_SPI_MISO,
+        .sclk_io_num = PIN_SPI_SCK,
+        .quadwp_io_num = -1,
+        .quadhd_io_num = -1,
+        .max_transfer_sz = 4096,
+    };
+    esp_err_t err = spi_bus_initialize(SD_SPI_HOST, &buscfg, SDSPI_DEFAULT_DMA);
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "spi_bus_initialize: %s", esp_err_to_name(err));
+        return NULL;
+    }
+
+    sdmmc_host_t host = SDSPI_HOST_DEFAULT();
+    host.slot = SD_SPI_HOST;
+    host.max_freq_khz = 10000;   // 10 MHz — lásd sd_init kommentjét (MSC sebesség)
+
+    sdspi_device_config_t slot_cfg = SDSPI_DEVICE_CONFIG_DEFAULT();
+    slot_cfg.gpio_cs = PIN_SD_CS;
+    slot_cfg.host_id = SD_SPI_HOST;
+
+    err = sdspi_host_init();
+    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
+        ESP_LOGE(TAG, "sdspi_host_init: %s", esp_err_to_name(err));
+        return NULL;
+    }
+
+    sdspi_dev_handle_t dev_handle;
+    err = sdspi_host_init_device(&slot_cfg, &dev_handle);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "sdspi_host_init_device: %s", esp_err_to_name(err));
+        return NULL;
+    }
+    host.slot = dev_handle;   // a card-init innen kommunikál a kártyával
+
+    sdmmc_card_t *card = calloc(1, sizeof(sdmmc_card_t));
+    if (!card) {
+        ESP_LOGE(TAG, "card alloc failed");
+        return NULL;
+    }
+    err = sdmmc_card_init(&host, card);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "sdmmc_card_init: %s", esp_err_to_name(err));
+        free(card);
+        return NULL;
+    }
+    sdmmc_card_print_info(stdout, card);
+    ESP_LOGI(TAG, "SD card raw-init OK (no FAT mount) — MSC ready");
+    return card;
+}
+
+void sd_speed_test(void)
+{
+    if (!s_card) { ESP_LOGW(TAG, "sdtest: nincs kártya"); return; }
+
+    const int CHUNK = 16;           // szektor/olvasás (8 KB) — = az MSC EP-buffer
+    const int SEQ_TOTAL = 4096;     // 2 MB szekvenciálisan
+    uint8_t *buf = heap_caps_malloc((size_t)CHUNK * 512, MALLOC_CAP_DMA);
+    if (!buf) { ESP_LOGE(TAG, "sdtest: buffer alloc fail"); return; }
+
+    // (1) Szekvenciális multi-block (64 szektor/olvasás)
+    int64_t t0 = esp_timer_get_time();
+    esp_err_t err = ESP_OK;
+    for (int s = 0; s < SEQ_TOTAL; s += CHUNK) {
+        err = sdmmc_read_sectors(s_card, buf, s, CHUNK);
+        if (err != ESP_OK) { ESP_LOGE(TAG, "sdtest multi: err @%d %s", s, esp_err_to_name(err)); break; }
+    }
+    int64_t dt = esp_timer_get_time() - t0;
+    if (err == ESP_OK && dt > 0)
+        ESP_LOGI(TAG, "sdtest MULTI(64-blk): %d KB / %lld ms = %.0f KB/s",
+                 SEQ_TOTAL / 2, dt / 1000, (double)SEQ_TOTAL * 512.0 * 1000.0 / (double)dt);
+
+    // (2) Szekvenciális single-block (1 szektor/olvasás) — összehasonlításnak
+    t0 = esp_timer_get_time();
+    for (int s = 0; s < 512; s++) {
+        if (sdmmc_read_sectors(s_card, buf, s, 1) != ESP_OK) break;
+    }
+    dt = esp_timer_get_time() - t0;
+    if (dt > 0)
+        ESP_LOGI(TAG, "sdtest SINGLE(1-blk): 256 KB / %lld ms = %.0f KB/s",
+                 dt / 1000, 256.0 * 1024.0 * 1000.0 / (double)dt);
+
+    // (3) Random 1-szektoros olvasás latencia (a FAT-séta jellege)
+    t0 = esp_timer_get_time();
+    int n = 300;
+    uint32_t cap = (s_card->csd.capacity > 1) ? s_card->csd.capacity - 1 : 1;
+    uint32_t lba = 12345;
+    for (int i = 0; i < n; i++) {
+        lba = (lba * 2654435761u + 1u) % cap;
+        if (sdmmc_read_sectors(s_card, buf, lba, 1) != ESP_OK) break;
+    }
+    dt = esp_timer_get_time() - t0;
+    ESP_LOGI(TAG, "sdtest RANDOM(1-blk): %d olvasás / %lld ms = %.2f ms/olvasás",
+             n, dt / 1000, (double)dt / 1000.0 / (double)n);
+
+    // (4) BPB dump: a FAT mérete dönti el, belefér-e a macOS 20s mount-ablakába.
+    if (sdmmc_read_sectors(s_card, buf, 0, 1) == ESP_OK) {
+        // MBR 1. partíció: típus @446+4, LBA-start @446+8 (LE)
+        uint32_t part_lba = buf[454] | (buf[455] << 8) | (buf[456] << 16) | ((uint32_t)buf[457] << 24);
+        uint8_t  part_type = buf[450];
+        ESP_LOGI(TAG, "sdtest MBR: part1 type=0x%02X lba_start=%lu", part_type, (unsigned long)part_lba);
+        if (part_lba > 0 && sdmmc_read_sectors(s_card, buf, part_lba, 1) == ESP_OK) {
+            uint16_t byts_per_sec = buf[11] | (buf[12] << 8);
+            uint8_t  sec_per_clus = buf[13];
+            uint8_t  num_fats     = buf[16];
+            uint32_t fatsz32      = buf[36] | (buf[37] << 8) | (buf[38] << 16) | ((uint32_t)buf[39] << 24);
+            uint64_t fat_bytes    = (uint64_t)fatsz32 * byts_per_sec;
+            ESP_LOGI(TAG, "sdtest BPB: byts/sec=%u sec/clus=%u (cluster=%u KB) num_fats=%u FATsz=%lu sec",
+                     byts_per_sec, sec_per_clus, (byts_per_sec * sec_per_clus) / 1024, num_fats,
+                     (unsigned long)fatsz32);
+            ESP_LOGI(TAG, "sdtest FAT-tábla = %lu KB/db -> ~%.1f s beolvasni @500KB/s",
+                     (unsigned long)(fat_bytes / 1024), (double)fat_bytes / 1024.0 / 500.0);
+        }
+    }
+
+    heap_caps_free(buf);
 }
 
 static bool has_ext(const char *name, const char *ext)

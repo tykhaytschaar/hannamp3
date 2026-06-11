@@ -10,6 +10,7 @@
 #include "cli.h"
 #include "audio.h"
 #include "player.h"
+#include "usb_msc.h"
 #include "io.h"
 #include "ui.h"
 
@@ -120,6 +121,17 @@ static void cli_dispatch(const char *cmd, const char *param)
         } else {
             ESP_LOGW(TAG, "bl: unknown param '%s' (use up/down/max/off/0-100)", param);
         }
+    } else if (strcmp(cmd, "sdtest") == 0) {
+        // Nyers SD-olvasási sebesség mérése (diagnosztika az USB MSC mount
+        // lassúságához). A közös SPI busz miatt az LVGL flush-okat kizárjuk.
+        ESP_LOGI(TAG, "sdtest: SD olvasási sebesség mérése...");
+        ui_spi_lock();
+        sd_speed_test();
+        ui_spi_unlock();
+    } else if (strcmp(cmd, "usb") == 0) {
+        // Újraindulás USB MSC módba (SD a natív USB-n külső meghajtóként).
+        ESP_LOGI(TAG, "usb -> reboot to USB MSC mode");
+        usb_msc_request_reboot();   // sosem tér vissza
     } else {
         ESP_LOGW(TAG, "unknown command: '%s'", cmd);
     }
