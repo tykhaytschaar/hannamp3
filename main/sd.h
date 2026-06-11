@@ -39,8 +39,9 @@ void sd_speed_test(void);
 // Visszaadja a beolvasott darabszámot.
 int  sd_scan_tracks(track_t *tracks, int max_tracks);
 
-// Ha létezik a fájl mellett "cover.jpg" vagy "folder.jpg",
-// kitölti az out_path-et és igazat ad vissza.
+// Album art keresése a track mappájában. Ha pontosan egy .jpg/.jpeg van a
+// mappában, az lesz az art (névtől függetlenül); ha több, név-egyezés dönt:
+// <tracknév>.jpg → cover.jpg → folder.jpg. Igazat ad, ha talált.
 bool sd_find_album_art(const char *mp3_path, char *out_path, int out_path_len);
 
 // Böngészőhöz: egy könyvtár tartalma (almappák + .mp3 fájlok), NEM rekurzív.

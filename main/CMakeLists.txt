@@ -14,6 +14,7 @@ idf_component_register(
         "player.c"
         "cli.c"
         "boot_splash.c"
+        "cover_art.c"
         "usb_msc.c"
         "fonts/mp3_inter_12.c"
         "fonts/mp3_inter_14.c"
@@ -34,5 +35,8 @@ idf_component_register(
         nvs_flash
         esp_new_jpeg
         esp_tinyusb
+    # Album art placeholder: a Now Playing cover-helye, ha egy trackhez nincs
+    # (vagy nem dekódolható) album art. Lásd cover_art.c.
     EMBED_FILES ${BOOT_SPLASH_FRAMES}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../assets/cover_placeholder.jpg"
 )

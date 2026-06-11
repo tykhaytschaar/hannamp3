@@ -25,6 +25,7 @@
 #include "mp3_fonts.h"
 #include "boot_splash.h"
 #include "usb_msc.h"  // usb_msc_request_reboot (Settings → USB Storage gomb)
+#include "cover_art.h"
 
 static const char *TAG = "ui";
 
@@ -140,8 +141,6 @@ typedef struct {
 } ui_t;
 
 static ui_t U;
-
-static char s_cover_path[MAX_PATH_LEN];
 
 // -----------------------------------------------------------------------------
 // Forward declarations
@@ -492,21 +491,26 @@ static lv_obj_t *transport_btn(lv_obj_t *parent, const char *icon,
 // Screen 1: Now Playing
 // Layout 480×320:
 //   y   0..28    : overlay header (screen chip + lock + battery)
-//   y  32..192   : cover 160×160 (bal) + info blokk (jobb, x=184, w=284)
+//   y  32..188   : cover 156×156 (bal) + info blokk (jobb, x=184, w=284)
+//                  (156: a cover alja a transport-gombsor aljához igazítva)
 //   y 204..308   : mini playlist panel (4 sor)
 // -----------------------------------------------------------------------------
 static void build_now_playing(void)
 {
     lv_obj_t *scr = U.scr[UI_SCREEN_NOW_PLAYING];
 
-    // Cover (bal oldal) — 160×160 rounded panel, JPG fallback hely
+    // Cover (bal oldal) — 156×156 rounded panel, album art / placeholder.
+    // 156: az alja (32+156=188) a transport sor aljával (140+48) egy vonalban.
     U.np_img_cover = lv_image_create(scr);
-    lv_obj_set_size(U.np_img_cover, 160, 160);
+    lv_obj_set_size(U.np_img_cover, 156, 156);
     lv_obj_align(U.np_img_cover, LV_ALIGN_TOP_LEFT, 12, 32);
     lv_obj_set_style_bg_color(U.np_img_cover, COL_BG_PANEL, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(U.np_img_cover, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_radius(U.np_img_cover, 8, LV_PART_MAIN);
     lv_obj_set_style_clip_corner(U.np_img_cover, true, LV_PART_MAIN);
+    // A dekódolt cover tetszőleges méretű — STRETCH skálázza a 160×160-as
+    // keretbe. (Borítók jellemzően négyzetesek, az aspect-torzítás elhanyagolható.)
+    lv_image_set_inner_align(U.np_img_cover, LV_IMAGE_ALIGN_STRETCH);
 
     // Info blokk (jobb oldal): title, subtitle, progress, time, state + volume
     // Egységes baseline x=184, szélesség 284 (480 - 184 - 12)
@@ -1027,16 +1031,22 @@ void ui_show_track(const track_t *tr)
         }
     }
 
-    // Album art keresése: cover.jpg / folder.jpg / azonos nevű .jpg
-    char art[MAX_PATH_LEN];
-    extern bool sd_find_album_art(const char *mp3_path, char *out_path, int out_path_len);
-    if (sd_find_album_art(tr->path, art, sizeof(art))) {
-        snprintf(s_cover_path, sizeof(s_cover_path), "S:%s",
-                 art + strlen(SD_MOUNT_POINT));
-        lv_image_set_src(U.np_img_cover, s_cover_path);
-        lv_obj_remove_flag(U.np_img_cover, LV_OBJ_FLAG_HIDDEN);
-    } else {
-        lv_obj_add_flag(U.np_img_cover, LV_OBJ_FLAG_HIDDEN);
+    // Album art: a keresési szabályt az sd_find_album_art adja (1 jpg a
+    // mappában → az; több → név-egyezés). A JPEG-et a cover_art_load dekódolja
+    // PSRAM-ba; ha nincs art / nem dekódolható → beágyazott placeholder.
+    if (U.np_img_cover) {
+        char art[MAX_PATH_LEN];
+        const lv_image_dsc_t *cover = NULL;
+        if (sd_find_album_art(tr->path, art, sizeof(art))) {
+            cover = cover_art_load(art);
+        }
+        if (!cover) cover = cover_art_placeholder();
+        if (cover) {
+            lv_image_set_src(U.np_img_cover, cover);
+            lv_obj_remove_flag(U.np_img_cover, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(U.np_img_cover, LV_OBJ_FLAG_HIDDEN);
+        }
     }
     lvgl_port_unlock();
 }
@@ -1046,7 +1056,16 @@ void ui_show_no_track(void)
     lvgl_port_lock(0);
     if (U.np_lbl_title)    lv_label_set_text(U.np_lbl_title, "...");
     if (U.np_lbl_subtitle) lv_label_set_text(U.np_lbl_subtitle, "Válassz a Library-ből");
-    if (U.np_img_cover)    lv_obj_add_flag(U.np_img_cover, LV_OBJ_FLAG_HIDDEN);
+    if (U.np_img_cover) {
+        // Track nélkül is a placeholder ül a cover-helyen (ne legyen üres folt).
+        const lv_image_dsc_t *ph = cover_art_placeholder();
+        if (ph) {
+            lv_image_set_src(U.np_img_cover, ph);
+            lv_obj_remove_flag(U.np_img_cover, LV_OBJ_FLAG_HIDDEN);
+        } else {
+            lv_obj_add_flag(U.np_img_cover, LV_OBJ_FLAG_HIDDEN);
+        }
+    }
     lvgl_port_unlock();
 }
 

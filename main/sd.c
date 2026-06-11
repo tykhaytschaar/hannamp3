@@ -520,23 +520,11 @@ int sd_scan_tracks(track_t *tracks, int max_tracks)
 
 bool sd_find_album_art(const char *mp3_path, char *out_path, int out_path_len)
 {
-    // Próbálkozás 1: ugyanaz a fájlnév .jpg-vel
-    // Próbálkozás 2: cover.jpg / folder.jpg a könyvtárban
-    char base[MAX_PATH_LEN];
-    strncpy(base, mp3_path, sizeof(base) - 1);
-    base[sizeof(base) - 1] = 0;
-    int len = strlen(base);
-    if (len < 4) return false;
-
-    // .mp3 → .jpg
-    strcpy(base + len - 4, ".jpg");
-    struct stat st;
-    if (stat(base, &st) == 0) {
-        strncpy(out_path, base, out_path_len);
-        return true;
-    }
-
-    // dirname/cover.jpg
+    // Szabály:
+    //   - pontosan EGY .jpg/.jpeg van a track mappájában → az lesz az art,
+    //     a fájlnévtől függetlenül
+    //   - több jpg → név-egyezés: <tracknév>.jpg, cover.jpg, folder.jpg
+    // (PNG nincs: a firmware-ben csak JPEG-dekóder van.)
     char dir[MAX_PATH_LEN];
     strncpy(dir, mp3_path, sizeof(dir) - 1);
     dir[sizeof(dir) - 1] = 0;
@@ -544,8 +532,46 @@ bool sd_find_album_art(const char *mp3_path, char *out_path, int out_path_len)
     if (!slash) return false;
     *slash = 0;
 
-    const char *candidates[] = { "cover.jpg", "folder.jpg", "cover.png", "folder.png" };
-    for (int i = 0; i < 4; i++) {
+    DIR *d = opendir(dir);
+    if (!d) return false;
+    int  jpg_count = 0;
+    char only[256] = {0};   // az egyetlen jpg neve (ha jpg_count == 1)
+    struct dirent *e;
+    while ((e = readdir(d)) != NULL) {
+        if (e->d_name[0] == '.' || e->d_type == DT_DIR) continue;
+        if (!has_ext(e->d_name, ".jpg") && !has_ext(e->d_name, ".jpeg")) continue;
+        if (++jpg_count == 1) {
+            strncpy(only, e->d_name, sizeof(only) - 1);
+        } else {
+            break;   // több is van — a név már nem számít, egyezésre váltunk
+        }
+    }
+    closedir(d);
+
+    if (jpg_count == 0) return false;
+    if (jpg_count == 1) {
+        snprintf(out_path, out_path_len, "%s/%s", dir, only);
+        return true;
+    }
+
+    // Több jpg → 1. jelölt: a track fájlneve .jpg kiterjesztéssel
+    struct stat st;
+    char base[MAX_PATH_LEN];
+    strncpy(base, mp3_path, sizeof(base) - 1);
+    base[sizeof(base) - 1] = 0;
+    char *dot = strrchr(base, '.');
+    if (dot && (size_t)(dot - base) + 5 < sizeof(base)) {
+        strcpy(dot, ".jpg");
+        if (stat(base, &st) == 0) {
+            strncpy(out_path, base, out_path_len);
+            out_path[out_path_len - 1] = 0;
+            return true;
+        }
+    }
+
+    // 2. jelölt: cover.jpg / folder.jpg (a FATFS név-egyeztetése kisbetű-független)
+    const char *candidates[] = { "cover.jpg", "folder.jpg" };
+    for (int i = 0; i < 2; i++) {
         snprintf(out_path, out_path_len, "%s/%s", dir, candidates[i]);
         if (stat(out_path, &st) == 0) return true;
     }
