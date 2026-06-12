@@ -32,6 +32,10 @@ typedef struct {
 static cover_slot_t s_slot[2];
 static int          s_active = -1;
 static cover_slot_t s_placeholder;
+// Az aktív slot forrás-útvonala. Albumon belüli track-váltásnál ugyanaz a
+// cover jön újra és újra — ilyenkor a már dekódolt buffert adjuk vissza,
+// SD-olvasás és dekód nélkül (egy váltás ára e nélkül ~0.5–1 s volt).
+static char         s_cur_path[384];
 
 // JPEG (memóriában) → RGB888 a slot friss PSRAM-bufferébe. A kimeneti
 // szélesség/magasság mindig 8 többszöröse (scale vagy clipper) — így az
@@ -135,6 +139,13 @@ const lv_image_dsc_t *cover_art_load(const char *path)
     // (~50–150 ms) alatt a UI áll — track-váltáskor ez nem zavaró.
     if (!lvgl_port_lock(0)) return NULL;
 
+    // Cache-találat: ugyanaz a fájl van már dekódolva → nincs SD/dekód.
+    if (s_active >= 0 && s_slot[s_active].buf &&
+        strcmp(path, s_cur_path) == 0) {
+        lvgl_port_unlock();
+        return &s_slot[s_active].dsc;
+    }
+
     const lv_image_dsc_t *res = NULL;
     uint8_t *in = NULL;
     FILE *f = fopen(path, "rb");
@@ -181,6 +192,12 @@ const lv_image_dsc_t *cover_art_load(const char *path)
     }
 
 out:
+    if (res) {
+        strncpy(s_cur_path, path, sizeof(s_cur_path) - 1);
+        s_cur_path[sizeof(s_cur_path) - 1] = 0;
+    } else {
+        s_cur_path[0] = 0;   // sikertelen load — ne legyen hamis cache-találat
+    }
     if (in) heap_caps_free(in);
     lvgl_port_unlock();
     return res;
