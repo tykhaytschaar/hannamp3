@@ -132,8 +132,7 @@ int  ui_cycle_idle_timeout(int dir);
 // érintett soron 3 px accent bal-csík). Az értékeket a player.c menti NVS-be.
 // -----------------------------------------------------------------------------
 typedef enum {
-    UI_SETTING_VOLUME = 0,
-    UI_SETTING_BACKLIGHT,
+    UI_SETTING_BACKLIGHT = 0,
     UI_SETTING_IDLE_TIMEOUT,
     UI_SETTING_SLEEP,
     UI_SETTING_ALBUM_END,

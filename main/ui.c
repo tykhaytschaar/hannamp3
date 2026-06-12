@@ -106,7 +106,8 @@ typedef struct {
     // Persistent overlay (battery + screen chip rendered on lv_layer_top)
     lv_obj_t *ovr_screen_chip;
     lv_obj_t *ovr_battery;
-    lv_obj_t *ovr_volume;   // hangerő chip a battery előtt (minden képernyőn)
+    lv_obj_t *ovr_volume;       // hangerő ikon a slider előtt (minden képernyőn)
+    lv_obj_t *ovr_vol_slider;   // hangerő mini-csúszka a headerben
     lv_obj_t *ovr_lock;     // lakat ikon (closed=lock / open=unlocked)
 
     // Now Playing widgets
@@ -123,12 +124,10 @@ typedef struct {
     lv_obj_t *lib_path;   // aktuális könyvtár fejléc
 
     // Settings widgets — value labelek
-    lv_obj_t *set_val_volume;
     lv_obj_t *set_val_backlight;
     lv_obj_t *set_val_idle;
     lv_obj_t *set_val_sleep;
     lv_obj_t *set_val_album_end;
-    lv_obj_t *set_sld_volume;     // Settings volume slider
     lv_obj_t *set_sld_backlight;  // Settings brightness slider
     // Settings widgets — szerkeszthető sorok (kurzor + edit highlight ide kerül)
     lv_obj_t *set_row[UI_SETTING_COUNT];   // [VOLUME], [IDLE_TIMEOUT]
@@ -150,7 +149,7 @@ static ui_t U;
 // Forward declarations
 // -----------------------------------------------------------------------------
 static void ui_touch_init(void);
-static void screen_gesture_cb(lv_event_t *e);
+static void header_gesture_cb(lv_event_t *e);
 static void build_overlay(void);
 static void build_now_playing(void);
 static void build_library(void);
@@ -162,6 +161,7 @@ static void update_screen_chip(void);
 static void browser_rebuild_list(void);
 static void browser_apply_cursor(void);
 static void update_mini_playlist(void);
+static void sld_volume_cb(lv_event_t *e);
 static void idle_label_refresh_locked(void);
 static void album_end_label_refresh_locked(void);
 static void settings_render_cursor_locked(void);
@@ -358,41 +358,36 @@ static void ui_touch_init(void)
 
     for (int i = 0; i < UI_SCREEN_COUNT; i++) {
         lv_obj_add_event_cb(U.scr[i], touch_log_event_cb, LV_EVENT_PRESSED, NULL);
-        // Swipe gesture: bal/jobb húzás váltogatja a képernyőket (a MENU
-        // gomb short press-ét helyettesíti). A gesture esemény a screen-en
-        // sül el, akkor is ha a touch egy belső widget (pl. lib_list)
-        // területén kezdődött — LVGL a domináns irányt nézi.
-        lv_obj_add_event_cb(U.scr[i], screen_gesture_cb, LV_EVENT_GESTURE, NULL);
     }
     lvgl_port_unlock();
 
-    ESP_LOGI(TAG, "touch ready — bal-felső ~(0,0), jobb-alsó ~(480,320). Swipe: ←/→ képernyőváltás.");
+    ESP_LOGI(TAG, "touch ready — bal-felső ~(0,0), jobb-alsó ~(480,320). Swipe a headerben: ←/→ képernyőváltás.");
 }
 
 // -----------------------------------------------------------------------------
-// Swipe gesture → képernyőváltás (a MENU gomb short press-ét helyettesíti)
+// Swipe gesture a HEADER sávon → képernyőváltás. A gesztus-sáv a top-layeren
+// ül (build_overlay), így csak a headerből indított húzás vált képernyőt — a
+// screen-tartalmon (listák, cover stb.) a vízszintes húzás nem csinál semmit.
+// A hangerő-csúszka a sáv felett van, az ő drag-je nem ér ide.
 // LV_DIR_LEFT  : ujj balra húzott → következő képernyő
 // LV_DIR_RIGHT : ujj jobbra húzott → előző képernyő
-// Fel/le gesture ignorálva — azt a lib_list scroll használja.
 // -----------------------------------------------------------------------------
-static void screen_gesture_cb(lv_event_t *e)
+static void header_gesture_cb(lv_event_t *e)
 {
     (void)e;
     lv_indev_t *indev = lv_indev_active();
     if (!indev) return;
-    // Ne váltsunk képernyőt, ha a gesztus egy slider húzásából (Settings) vagy
-    // egy lista görgetéséből származik — különben a vízszintes slider-drag
-    // átugrana az előző/következő oldalra.
-    lv_obj_t *act = lv_indev_get_active_obj();
-    if (act && lv_obj_check_type(act, &lv_slider_class)) return;
-    if (lv_indev_get_scroll_obj(indev)) return;
+    // Alvó kijelzőn a gesztus csak ébreszt (mint a gombok / tap-ok).
+    if (ui_user_activity()) {
+        lv_indev_wait_release(indev);
+        return;
+    }
     lv_dir_t dir = lv_indev_get_gesture_dir(indev);
     if (dir == LV_DIR_LEFT || dir == LV_DIR_RIGHT) {
         if (dir == LV_DIR_LEFT) ui_next_screen();
         else                    ui_prev_screen();
-        // A touch hátralévő részét (a felengedésig) eldobjuk, különben az ujj
-        // felengedése már az ÚJ képernyő egy során click-et generálna → swipe
-        // után véletlen track-kiválasztás.
+        // A touch hátralévő részét (a felengedésig) eldobjuk — az ujj
+        // felengedése ne generáljon click-et sehol.
         lv_indev_wait_release(indev);
     }
 }
@@ -436,6 +431,10 @@ static void build_overlay(void)
     // Az overlay-en kattintásokat nem akarunk elnyelni — pl. a list scroll
     // alatta legyen elérhető.
     lv_obj_remove_flag(top, LV_OBJ_FLAG_CLICKABLE);
+    // A top layer NE scrollozzon: különben a swipe-sávon induló vízszintes
+    // húzást a scroll-engine fogná el (scroll_obj != NULL → az indev nem küld
+    // LV_EVENT_GESTURE-t). Ugyanaz az ok, mint a screeneknél (apply_screen_bg).
+    lv_obj_remove_flag(top, LV_OBJ_FLAG_SCROLLABLE);
 
     // Default font az overlay layerre — az itt létrehozott labelek (battery,
     // screen chip, lock indikátor stb.) NEM öröklik a screen text fontját,
@@ -444,29 +443,69 @@ static void build_overlay(void)
     // ikonjaink (MP3_SYMBOL_LOCK / MP3_SYMBOL_UNLOCK) — négyzet jelenne meg.
     lv_obj_set_style_text_font(top, &mp3_inter_14, LV_PART_MAIN);
 
+    // Swipe-sáv: a képernyőváltó gesztus CSAK a headerből indítva érvényes.
+    // Átlátszó, kattintható sáv a top-layeren, ELSŐKÉNT létrehozva (legalul
+    // a z-sorrendben): a press ide esik (a nem-klikkelhető labelek átengedik),
+    // a később létrehozott hangerő-csúszka viszont felette nyeri a hit-tesztet.
+    {
+        lv_obj_t *strip = lv_obj_create(top);
+        lv_obj_remove_style_all(strip);
+        lv_obj_set_size(strip, LCD_H_RES, 30);
+        lv_obj_set_pos(strip, 0, 0);
+        lv_obj_add_flag(strip, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_remove_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
+        // GESTURE_BUBBLE NÉLKÜL: az indev a gesztust a bubble-lánc TETEJÉNEK
+        // küldi (itt a top layer lenne) — a flag levételével a sávon áll meg
+        // a lánc, így a cb ténylegesen itt sül el.
+        lv_obj_remove_flag(strip, LV_OBJ_FLAG_GESTURE_BUBBLE);
+        lv_obj_add_event_cb(strip, header_gesture_cb, LV_EVENT_GESTURE, NULL);
+    }
+
+    // Oldalnév középen.
     U.ovr_screen_chip = lv_label_create(top);
     lv_obj_set_style_text_color(U.ovr_screen_chip, COL_ACCENT, LV_PART_MAIN);
     lv_label_set_text(U.ovr_screen_chip, "NOW PLAYING");
-    lv_obj_align(U.ovr_screen_chip, LV_ALIGN_TOP_LEFT, 8, 6);
+    lv_obj_align(U.ovr_screen_chip, LV_ALIGN_TOP_MID, 0, 6);
 
     U.ovr_battery = lv_label_create(top);
     lv_obj_set_style_text_color(U.ovr_battery, COL_TEXT_DIM, LV_PART_MAIN);
     lv_label_set_text(U.ovr_battery, LV_SYMBOL_BATTERY_FULL " ---");
     lv_obj_align(U.ovr_battery, LV_ALIGN_TOP_RIGHT, -8, 6);
 
-    // Hangerő chip a battery előtt (balra). align_to dinamikusan a battery
-    // bal széléhez igazítja, így a battery szövegszélességtől függetlenül jó.
+    // Hangerő a BAL szélen: ikon + knob-nélküli mini-csúszka,
+    // minden képernyőn elérhető (lv_layer_top). Drag közben realtime állít,
+    // elengedéskor perzisztál (sld_volume_cb). Kezdőérték placeholder (70) —
+    // a player_start ui_set_volume(saved)-del szinkronizálja. (Itt NEM hívunk
+    // audio_get_volume()-ot: az s_status_mux-ot venné, amit csak a később
+    // futó audio_init hoz létre.)
+    U.ovr_vol_slider = lv_slider_create(top);
+    lv_obj_set_size(U.ovr_vol_slider, 110, 8);
+    lv_slider_set_range(U.ovr_vol_slider, 0, 100);
+    lv_slider_set_value(U.ovr_vol_slider, 70, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(U.ovr_vol_slider, COL_ACCENT_DIM, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(U.ovr_vol_slider, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(U.ovr_vol_slider, COL_ACCENT, LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(U.ovr_vol_slider, LV_OPA_TRANSP, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(U.ovr_vol_slider, 0, LV_PART_KNOB);
+    // +10 px találati zóna — függőlegesen sem ér le a screen-tartalomig.
+    lv_obj_set_ext_click_area(U.ovr_vol_slider, 10);
+    lv_obj_add_event_cb(U.ovr_vol_slider, sld_volume_cb, LV_EVENT_VALUE_CHANGED, NULL);
+    lv_obj_add_event_cb(U.ovr_vol_slider, sld_volume_cb, LV_EVENT_RELEASED, NULL);
+    lv_obj_align(U.ovr_vol_slider, LV_ALIGN_TOP_LEFT, 34, 9);
+
     U.ovr_volume = lv_label_create(top);
     lv_obj_set_style_text_color(U.ovr_volume, COL_TEXT, LV_PART_MAIN);
-    lv_label_set_text(U.ovr_volume, LV_SYMBOL_VOLUME_MAX " ---");
-    lv_obj_align_to(U.ovr_volume, U.ovr_battery, LV_ALIGN_OUT_LEFT_MID, -14, 0);
+    lv_label_set_text(U.ovr_volume, LV_SYMBOL_VOLUME_MAX);
+    lv_obj_align(U.ovr_volume, LV_ALIGN_TOP_LEFT, 8, 6);
 
     // Lakat ikon a center-top-on. Default: open () — io_init beolvassa
     // a switch valódi állapotát és frissíti, ha kell.
     U.ovr_lock = lv_label_create(top);
     lv_obj_set_style_text_color(U.ovr_lock, COL_TEXT_DIM, LV_PART_MAIN);
     lv_label_set_text(U.ovr_lock, "\xEF\x82\x9C");   // 0xF09C — lock-open
-    lv_obj_align(U.ovr_lock, LV_ALIGN_TOP_MID, 0, 6);
+    // A battery előtt jobbra — a pontos igazítást az ui_set_battery frissíti,
+    // mert a battery-szöveg szélessége változik (az align_to egyszeri).
+    lv_obj_align_to(U.ovr_lock, U.ovr_battery, LV_ALIGN_OUT_LEFT_MID, -12, 0);
 }
 
 static void update_screen_chip(void)
@@ -618,17 +657,17 @@ static void build_library(void)
 // -----------------------------------------------------------------------------
 // Screen 3: Settings — read-only status panel
 // -----------------------------------------------------------------------------
-// Volume slider: drag közben realtime (NEM perzisztál — a mid-drag flash-írás
-// megakasztaná az audiót), elengedéskor NVS-mentés.
+// Volume slider (header): drag közben realtime (NEM perzisztál — a mid-drag
+// flash-írás megakasztaná az audiót), elengedéskor NVS-mentés. Alvó kijelzőn
+// az első esemény csak ébreszt (mint a gombok / tap-sorok).
 static void sld_volume_cb(lv_event_t *e)
 {
+    if (ui_user_activity()) return;
     lv_obj_t *sld = lv_event_get_target_obj(e);
     int v = lv_slider_get_value(sld);
     if (lv_event_get_code(e) == LV_EVENT_VALUE_CHANGED) {
         audio_set_volume((uint8_t)v);
-        ui_set_volume((uint8_t)v);             // header chip + value label
-        s_set_cursor = UI_SETTING_VOLUME;
-        settings_render_cursor_locked();
+        ui_set_volume((uint8_t)v);             // header ikon + slider sync
     } else {  // LV_EVENT_RELEASED
         player_set_volume((uint8_t)v);         // perzisztens
     }
@@ -777,12 +816,7 @@ static void build_settings(void)
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(panel, 6, LV_PART_MAIN);
 
-    // Kezdőérték placeholder (70) — a player_start ui_set_volume(saved)-del
-    // szinkronizálja. FONTOS: itt NEM hívunk audio_get_volume()-ot, mert az
-    // s_status_mux-ot venné, amit csak a később futó audio_init hoz létre.
-    U.set_row[UI_SETTING_VOLUME] =
-        settings_slider_row(panel, LV_SYMBOL_VOLUME_MAX, "Volume", 70,
-                            sld_volume_cb, &U.set_sld_volume, &U.set_val_volume);
+    // (A hangerő-csúszka a headerben él — lásd build_overlay.)
     U.set_row[UI_SETTING_BACKLIGHT] =
         settings_slider_row(panel, NULL, "Brightness", s_bl_percent,
                             sld_backlight_cb, &U.set_sld_backlight, &U.set_val_backlight);
@@ -1617,17 +1651,12 @@ void ui_set_progress(uint32_t pos_ms, uint32_t dur_ms)
 void ui_set_volume(uint8_t vol)
 {
     lvgl_port_lock(0);
-    char s[24];
     const char *sym = (vol == 0) ? LV_SYMBOL_MUTE :
                       (vol < 33)  ? LV_SYMBOL_VOLUME_MID :
                                     LV_SYMBOL_VOLUME_MAX;
-    snprintf(s, sizeof(s), "%s %u%%", sym, vol);
-    if (U.ovr_volume)     lv_label_set_text(U.ovr_volume, s);   // header chip
-    if (U.set_val_volume) lv_label_set_text_fmt(U.set_val_volume, "%u%%", vol);
-    if (U.set_sld_volume) lv_slider_set_value(U.set_sld_volume, vol, LV_ANIM_OFF);
-    // A header chip pozíciója a battery szélességéhez igazodik (változhat a %).
-    if (U.ovr_volume && U.ovr_battery)
-        lv_obj_align_to(U.ovr_volume, U.ovr_battery, LV_ALIGN_OUT_LEFT_MID, -14, 0);
+    if (U.ovr_volume)     lv_label_set_text(U.ovr_volume, sym);
+    if (U.ovr_vol_slider) lv_slider_set_value(U.ovr_vol_slider, vol, LV_ANIM_OFF);
+    // Bal szélre rögzített pozíciók (build_overlay) — nincs igazítanivaló.
     lvgl_port_unlock();
 }
 
@@ -1641,6 +1670,10 @@ void ui_set_battery(uint16_t mv, uint8_t percent)
                                        LV_SYMBOL_BATTERY_EMPTY;
     if (U.ovr_battery) {
         lv_label_set_text_fmt(U.ovr_battery, "%s %u%%", sym, percent);
+        // A lakat a battery bal szélére igazodik — a szöveg szélessége
+        // változhatott, az align_to egyszeri, ezért újra kell igazítani.
+        if (U.ovr_lock)
+            lv_obj_align_to(U.ovr_lock, U.ovr_battery, LV_ALIGN_OUT_LEFT_MID, -12, 0);
     }
     (void)mv;   // a Settings Battery sor megszűnt — az mV csak oda került ki
     lvgl_port_unlock();

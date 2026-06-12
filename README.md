@@ -34,7 +34,7 @@ bekötés: [PINOUT.md](PINOUT.md), hátralévő bekötések: [WIRING_TODO.md](WI
     „Play all" szerepét, és a lejátszási sorrendet a playlist adja —
     albumokon átívelő listák is működnek (a relatív utak az m3u mappájához
     képest értendők, a hibás sorok kimaradnak)
-  - *Settings* — Volume- és Brightness-slider, Display off,
+  - *Settings* — Brightness-slider, Display off,
     Sleep, Album end (Stop / Repeat / Next album — utóbbi az album
     testvérmappái közt lép abc-sorrendben, körbefordulva; az egy mappából
     építkező m3u albumként viselkedik, az albumokon átívelő m3u végén stop).
