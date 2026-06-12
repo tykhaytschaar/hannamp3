@@ -37,8 +37,12 @@ void player_do_action(player_action_t a);
 // idx már a játszó track és megy → no-op. Alvó kijelzőn csak ébreszt.
 void player_play_index(int idx);
 
-// Library tap: az adott entry aktiválása (mappa → belép; fájl → album-load +
-// play + Now Playing). A ".." parent sor a player_browser_up()-ot hívja.
-// Mindkettő alvó kijelzőn csak ébreszt.
+// Library tap: az adott entry aktiválása (mappa → belép; m3u → playlist-load +
+// play + Now Playing; fájl → album-load + play + Now Playing). A ".." parent
+// sor a player_browser_up()-ot hívja. Mind alvó kijelzőn csak ébreszt.
 void player_browser_tap(int idx);
 void player_browser_up(void);
+
+// Library "Play all" sor (m3u nélküli mappák): a böngészett mappa fájljainak
+// betöltése név-sorrendben + play az elsőtől + Now Playing. Alvón csak ébreszt.
+void player_browser_play_all(void);

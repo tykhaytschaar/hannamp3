@@ -805,34 +805,40 @@ static lv_obj_t *list_btn_label(lv_obj_t *btn)
     return NULL;
 }
 
-// Library: nem-gyökér mappában egy UI-only ".." parent sor kerül a lista
-// elejére (child 0). Ilyenkor az s_bentries[i] a (i+1). gyerek. Az offset:
-static bool s_lib_show_parent = false;
+// Library: a lista elejére UI-only sorok kerülhetnek (nem cursor-targetek):
+// nem-gyökér mappában egy ".." parent sor, m3u nélküli zenés mappában egy
+// "Play all" sor. Az s_bentries[i] a (i+offset). gyerek. Az offset-flagek:
+static bool s_lib_show_parent  = false;
+static bool s_lib_show_playall = false;
 
 static void browser_apply_cursor(void)
 {
     if (!U.lib_list) return;
-    int off = s_lib_show_parent ? 1 : 0;
+    int off = (s_lib_show_parent ? 1 : 0) + (s_lib_show_playall ? 1 : 0);
     uint32_t n = lv_obj_get_child_count(U.lib_list);
     for (uint32_t i = 0; i < n; i++) {
         lv_obj_t *btn = lv_obj_get_child(U.lib_list, i);
         lv_obj_t *lbl = list_btn_label(btn);
-        bool is_parent = (off && i == 0);
-        bool is_cursor = (!is_parent && (int)i - off == U.br_cursor);
+        bool is_synth  = ((int)i < off);   // ".." / "Play all" UI-only sor
+        bool is_cursor = (!is_synth && (int)i - off == U.br_cursor);
         if (is_cursor) {
             lv_obj_set_style_bg_color(btn, COL_ACCENT, LV_PART_MAIN);
             lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
             lv_obj_set_style_text_color(btn, lv_color_hex(0x06141A), LV_PART_MAIN);
             // Csak a kijelölt sor neve gördül, ha hosszú.
             if (lbl) lv_label_set_long_mode(lbl, LV_LABEL_LONG_SCROLL_CIRCULAR);
-        } else if (is_parent) {
-            // Parent ".." sor: accent szöveg, átlátszó háttér (nem cursor-target).
+        } else if (is_synth) {
+            // UI-only sor: accent szöveg, átlátszó háttér (nem cursor-target).
             lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, LV_PART_MAIN);
             lv_obj_set_style_text_color(btn, COL_ACCENT, LV_PART_MAIN);
             if (lbl) lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
         } else {
             lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, LV_PART_MAIN);
-            lv_obj_set_style_text_color(btn, COL_TEXT, LV_PART_MAIN);
+            // Az m3u playlist-sorok kurzor nélkül is accent színűek.
+            int ei = (int)i - off;
+            bool m3u = (U.br_entries && ei >= 0 && ei < U.br_count &&
+                        U.br_entries[ei].is_m3u);
+            lv_obj_set_style_text_color(btn, m3u ? COL_ACCENT : COL_TEXT, LV_PART_MAIN);
             // A többi "..."-tal levágva, nem gördül.
             if (lbl) lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
         }
@@ -850,8 +856,9 @@ static void browser_apply_cursor(void)
 static void lib_act_async(void *p)
 {
     int idx = (int)(intptr_t)p;
-    if (idx < 0) player_browser_up();
-    else         player_browser_tap(idx);
+    if      (idx == -2) player_browser_play_all();
+    else if (idx < 0)   player_browser_up();
+    else                player_browser_tap(idx);
 }
 static void lib_row_click(lv_event_t *e)
 {
@@ -864,6 +871,15 @@ static void browser_rebuild_list(void)
     if (!U.lib_list) return;
     lv_obj_clean(U.lib_list);
 
+    // Mappa-statisztika a "Play all" sorhoz és az m3u-sorok címkézéséhez.
+    int  m3u_count = 0;
+    bool any_file  = false;
+    for (int i = 0; i < U.br_count; i++) {
+        if (U.br_entries[i].is_dir) continue;
+        if (U.br_entries[i].is_m3u) m3u_count++;
+        else                        any_file = true;
+    }
+
     // Parent ".." sor, ha nem gyökérben vagyunk (UI-only, user_data = -1).
     if (s_lib_show_parent) {
         lv_obj_t *pbtn = lv_list_add_button(U.lib_list, LV_SYMBOL_DIRECTORY, "..");
@@ -873,16 +889,38 @@ static void browser_rebuild_list(void)
         lv_obj_add_event_cb(pbtn, lib_row_click, LV_EVENT_CLICKED, NULL);
     }
 
+    // "Play all" sor (UI-only, user_data = -2): a mappa fájljai név-sorrendben,
+    // play az elsőtől. Csak ha van mit játszani és NINCS m3u — ha van, a
+    // playlist-sor(ok) töltik be ezt a szerepet (lent, valódi entry-ként).
+    s_lib_show_playall = (m3u_count == 0 && any_file);
+    if (s_lib_show_playall) {
+        lv_obj_t *pa = lv_list_add_button(U.lib_list, LV_SYMBOL_PLAY, "Play all");
+        lv_obj_set_style_border_width(pa, 0, LV_PART_MAIN);
+        lv_obj_set_style_text_color(pa, COL_ACCENT, LV_PART_MAIN);
+        lv_obj_set_user_data(pa, (void *)(intptr_t)-2);
+        lv_obj_add_event_cb(pa, lib_row_click, LV_EVENT_CLICKED, NULL);
+    }
+
     if (!U.br_entries || U.br_count == 0) {
         lv_obj_t *empty = lv_list_add_text(U.lib_list, "(empty)");
         lv_obj_set_style_text_color(empty, COL_TEXT_DIM, 0);
         return;
     }
     for (int i = 0; i < U.br_count; i++) {
-        // Mappa = folder ikon, fájl = audio ikon
+        // Mappa = folder ikon, m3u = play ikon, fájl = audio ikon.
         const char *icon = U.br_entries[i].is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_AUDIO;
-        lv_obj_t *btn = lv_list_add_button(U.lib_list, icon, U.br_entries[i].name);
+        const char *text = U.br_entries[i].name;
+        if (U.br_entries[i].is_m3u) {
+            icon = LV_SYMBOL_PLAY;
+            // Egyetlen playlist → beszédes "Play all" felirat; többnél a
+            // fájlnevük különbözteti meg őket.
+            if (m3u_count == 1) text = "Play all";
+        }
+        lv_obj_t *btn = lv_list_add_button(U.lib_list, icon, text);
         lv_obj_set_style_border_width(btn, 0, LV_PART_MAIN);   // divider-csík ki
+        if (U.br_entries[i].is_m3u) {
+            lv_obj_set_style_text_color(btn, COL_ACCENT, LV_PART_MAIN);
+        }
         lv_obj_set_user_data(btn, (void *)(intptr_t)i);
         lv_obj_add_event_cb(btn, lib_row_click, LV_EVENT_CLICKED, NULL);
     }

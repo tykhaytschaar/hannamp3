@@ -578,11 +578,19 @@ bool sd_find_album_art(const char *mp3_path, char *out_path, int out_path_len)
     return false;
 }
 
-// Mappák előre, fájlok hátra; azon belül ábécé (kis/nagybetű-független).
+// Sorrend: m3u playlistek legelöl (a UI "Play all" sorai), aztán mappák,
+// végül fájlok; azon belül ábécé (kis/nagybetű-független).
+static int entry_rank(const dir_entry_t *e)
+{
+    if (e->is_m3u) return 0;
+    return e->is_dir ? 1 : 2;
+}
+
 static int cmp_entries(const void *a, const void *b)
 {
     const dir_entry_t *ea = a, *eb = b;
-    if (ea->is_dir != eb->is_dir) return ea->is_dir ? -1 : 1;
+    int ra = entry_rank(ea), rb = entry_rank(eb);
+    if (ra != rb) return ra - rb;
     return strcasecmp(ea->name, eb->name);
 }
 
@@ -599,11 +607,14 @@ int sd_list_dir(const char *path, dir_entry_t *out, int max_entries)
     while ((e = readdir(d)) != NULL && n < max_entries) {
         if (e->d_name[0] == '.') continue;
         bool is_dir = (e->d_type == DT_DIR);
-        if (!is_dir && !has_ext(e->d_name, ".mp3")
+        bool is_m3u = !is_dir && (has_ext(e->d_name, ".m3u")
+                               || has_ext(e->d_name, ".m3u8"));
+        if (!is_dir && !is_m3u && !has_ext(e->d_name, ".mp3")
                     && !has_ext(e->d_name, ".wav")) continue;
         strncpy(out[n].name, e->d_name, sizeof(out[n].name) - 1);
         out[n].name[sizeof(out[n].name) - 1] = 0;
         out[n].is_dir = is_dir;
+        out[n].is_m3u = is_m3u;
         n++;
     }
     closedir(d);
@@ -619,5 +630,144 @@ int sd_load_dir_tracks(const char *path, track_t *out, int max_tracks)
     album = album ? album + 1 : path;
     int n = scan_album_dir(path, album, out, 0, max_tracks);
     qsort(out, n, sizeof(track_t), cmp_tracks_by_name);
+    return n;
+}
+
+// -----------------------------------------------------------------------------
+// M3U playlist betöltés
+// -----------------------------------------------------------------------------
+// "." és ".." komponensek feloldása in-place. Kell, mert a FATFS VFS
+// (FF_FS_RPATH=0) nem értelmezi a ".."-t, az m3u-kban viszont tipikus a
+// "../MasikAlbum/track.mp3" forma. Gyökér fölé nem enged ki (a felesleges
+// ".." egyszerűen elfogy — az eredmény stat()-ja úgyis megbukik, ha rossz).
+static void path_normalize(char *path)
+{
+    char buf[sizeof(((track_t *)0)->path)];
+    strncpy(buf, path, sizeof(buf) - 1);
+    buf[sizeof(buf) - 1] = 0;
+
+    char *segs[48];
+    int n = 0;
+    bool abs = (buf[0] == '/');
+    for (char *tok = strtok(buf, "/"); tok; tok = strtok(NULL, "/")) {
+        if (strcmp(tok, ".") == 0) continue;
+        if (strcmp(tok, "..") == 0) { if (n > 0) n--; continue; }
+        if (n < (int)(sizeof(segs) / sizeof(segs[0]))) segs[n++] = tok;
+    }
+    char *w = path;
+    if (abs) *w++ = '/';
+    for (int i = 0; i < n; i++) {
+        if (i) *w++ = '/';
+        size_t l = strlen(segs[i]);
+        memcpy(w, segs[i], l);
+        w += l;
+    }
+    *w = 0;
+}
+
+// Egy track_t kitöltése teljes útvonalból: név (kiterjesztés nélkül), album-
+// fallback a szülőmappa neve, ID3 MP3-nál — ugyanaz a logika, mint a
+// scan_album_dir-ben, csak egyetlen, már ismert útvonalra.
+static bool fill_track_from_path(const char *path, track_t *t)
+{
+    const char *base = strrchr(path, '/');
+    base = base ? base + 1 : path;
+    bool is_mp3 = has_ext(base, ".mp3");
+    if (!is_mp3 && !has_ext(base, ".wav")) return false;
+
+    strncpy(t->path, path, sizeof(t->path) - 1);
+    t->path[sizeof(t->path) - 1] = 0;
+
+    strncpy(t->name, base, sizeof(t->name) - 1);
+    t->name[sizeof(t->name) - 1] = 0;
+    int len = strlen(t->name);
+    if (len > 4) t->name[len - 4] = 0;   // .mp3 / .wav lecsap
+
+    // Album fallback: a track SAJÁT mappájának neve (albumokon átívelő
+    // playlistnél trackenként más-más).
+    t->album[0] = 0;
+    if (base > path + 1) {
+        const char *q = base - 2;             // a '/' előtti utolsó karakter
+        while (q > path && *q != '/') q--;
+        if (*q == '/') q++;
+        size_t alen = (size_t)(base - 1 - q);
+        if (alen >= sizeof(t->album)) alen = sizeof(t->album) - 1;
+        memcpy(t->album, q, alen);
+        t->album[alen] = 0;
+    }
+
+    t->title[0]  = 0;
+    t->artist[0] = 0;
+    if (is_mp3) {
+        char id3_album[sizeof(t->album)] = {0};
+        sd_load_id3(t->path,
+                    t->title,  sizeof(t->title),
+                    t->artist, sizeof(t->artist),
+                    id3_album, sizeof(id3_album));
+        if (id3_album[0]) {
+            strncpy(t->album, id3_album, sizeof(t->album) - 1);
+            t->album[sizeof(t->album) - 1] = 0;
+        }
+    }
+    return true;
+}
+
+int sd_load_m3u_tracks(const char *m3u_path, track_t *out, int max_tracks)
+{
+    if (!s_card) return 0;
+    FILE *f = fopen(m3u_path, "r");
+    if (!f) {
+        ESP_LOGW(TAG, "m3u: nem nyithato: %s", m3u_path);
+        return 0;
+    }
+
+    // Az m3u mappája — ehhez képest oldjuk fel a relatív utakat.
+    char dir[sizeof(((track_t *)0)->path)];
+    strncpy(dir, m3u_path, sizeof(dir) - 1);
+    dir[sizeof(dir) - 1] = 0;
+    char *slash = strrchr(dir, '/');
+    if (slash) *slash = 0;
+    else       strcpy(dir, SD_MOUNT_POINT);
+
+    int n = 0, skipped = 0;
+    char line[sizeof(((track_t *)0)->path)];
+    bool truncated = false;
+    while (fgets(line, sizeof(line), f)) {
+        if (n >= max_tracks) { truncated = true; break; }
+
+        // Trim: CR/LF/szóköz a végéről, szóköz az elejéről; backslash → slash.
+        int l = strlen(line);
+        while (l > 0 && (line[l-1] == '\r' || line[l-1] == '\n' ||
+                         line[l-1] == ' '  || line[l-1] == '\t')) line[--l] = 0;
+        char *p = line;
+        while (*p == ' ' || *p == '\t') p++;
+        if (*p == 0 || *p == '#') continue;     // üres sor / EXTM3U / EXTINF
+        for (char *c = p; *c; c++) if (*c == '\\') *c = '/';
+
+        char full[sizeof(((track_t *)0)->path)];
+        if (p[0] == '/') {
+            // Abszolút út: ha nem a mountpont alatt van (PC-n készült lista),
+            // a kártya gyökeréhez értelmezzük.
+            if (strncmp(p, SD_MOUNT_POINT "/", strlen(SD_MOUNT_POINT) + 1) == 0)
+                snprintf(full, sizeof(full), "%.383s", p);
+            else
+                snprintf(full, sizeof(full), SD_MOUNT_POINT "%.376s", p);
+        } else {
+            snprintf(full, sizeof(full), "%.255s/%.127s", dir, p);
+        }
+        path_normalize(full);
+
+        struct stat st;
+        if (stat(full, &st) != 0 || !fill_track_from_path(full, &out[n])) {
+            skipped++;
+            ESP_LOGW(TAG, "m3u: kihagyva: '%s'", p);
+            continue;
+        }
+        n++;
+    }
+    fclose(f);
+
+    ESP_LOGI(TAG, "m3u %s: %d track (%d kihagyva)", m3u_path, n, skipped);
+    if (truncated) ESP_LOGW(TAG, "m3u: a lista %d tracknel csonkolva", max_tracks);
     return n;
 }

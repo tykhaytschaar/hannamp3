@@ -185,27 +185,58 @@ static void play_current(void)
     select_current(true);
 }
 
-// Play a böngészőben: mappán állva belép, fájlon állva betölti a mappa
-// MP3-jait lejátszási listának és elindítja a kiválasztott számot.
+// Play a böngészőben: mappán állva belép; m3u-n a playlist lesz a lejátszási
+// lista (a lista sorrendjében); fájlon a mappa MP3-jai, a kiválasztottól indítva.
 static void browser_activate(void)
 {
     if (s_bcount == 0) return;
-    if (s_bentries[s_bcursor].is_dir) {
+    const dir_entry_t *ent = &s_bentries[s_bcursor];
+    if (ent->is_dir) {
         browser_enter();
         return;
     }
-    // Fájl: a böngészett mappa összes MP3-ja lesz a lejátszási lista (album).
+
     char target[512];
-    snprintf(target, sizeof(target), "%.383s/%.127s", s_bpath, s_bentries[s_bcursor].name);
-    s_count = sd_load_dir_tracks(s_bpath, s_tracks, MAX_TRACKS);
-    s_idx = 0;
-    for (int i = 0; i < s_count; i++) {
-        if (strcmp(s_tracks[i].path, target) == 0) { s_idx = i; break; }
+    snprintf(target, sizeof(target), "%.383s/%.127s", s_bpath, ent->name);
+
+    if (ent->is_m3u) {
+        // Playlist: a lejátszási lista az m3u sorrendje — a prev/next és az
+        // auto-advance is ezt követi (s_tracks feltöltési sorrend = sorrend).
+        s_count = sd_load_m3u_tracks(target, s_tracks, MAX_TRACKS);
+        s_idx = 0;
+        if (s_count == 0) {
+            ui_show_no_track();   // üres/hibás lista — nincs mit indítani
+            return;
+        }
+    } else {
+        // Fájl: a böngészett mappa összes MP3-ja lesz a lejátszási lista (album).
+        s_count = sd_load_dir_tracks(s_bpath, s_tracks, MAX_TRACKS);
+        s_idx = 0;
+        for (int i = 0; i < s_count; i++) {
+            if (strcmp(s_tracks[i].path, target) == 0) { s_idx = i; break; }
+        }
     }
     play_current();
     ui_show_screen(UI_SCREEN_NOW_PLAYING);
     // A böngészett mappát itt mentjük (nem minden navigációnál) — track-váltás
     // van, a flash-commit cache-stall-ja a frissen induló lejátszásban elrejtve.
+    persist_set_str("br_dir", s_bpath);
+}
+
+// Library "Play all" sor (m3u nélküli mappák): a mappa fájljainak betöltése
+// név-sorrendben + lejátszás az elsőtől + váltás Now Playingre. Ekvivalens
+// az első fájlra tapeléssel.
+void player_browser_play_all(void)
+{
+    if (ui_user_activity()) return;        // alvó kijelző: a tap csak ébreszt
+    s_count = sd_load_dir_tracks(s_bpath, s_tracks, MAX_TRACKS);
+    s_idx = 0;
+    if (s_count == 0) {
+        ui_show_no_track();
+        return;
+    }
+    play_current();
+    ui_show_screen(UI_SCREEN_NOW_PLAYING);
     persist_set_str("br_dir", s_bpath);
 }
 

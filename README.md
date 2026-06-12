@@ -28,7 +28,12 @@ bekötés: [PINOUT.md](PINOUT.md), hátralévő bekötések: [WIRING_TODO.md](WI
 - **Három képernyő** (swipe-pal vagy Menu gombbal váltható):
   - *Now Playing* — album art, cím, előadó · album, progress, transport
     gombok, görgethető album-tracklista (tap = lejátszás)
-  - *Library* — mappa-böngésző (almappák + MP3-ak, `..` sorral)
+  - *Library* — mappa-böngésző (almappák + MP3-ak, `..` sorral). Zenés
+    mappákban a lista tetején **„Play all"** sor: az albumot az elsőtől
+    indítja. Ha a mappában `.m3u`/`.m3u8` playlist van, az veszi át a
+    „Play all" szerepét, és a lejátszási sorrendet a playlist adja —
+    albumokon átívelő listák is működnek (a relatív utak az m3u mappájához
+    képest értendők, a hibás sorok kimaradnak)
   - *Settings* — Battery, Volume- és Brightness-slider, Display off,
     Sleep, USB Storage
 - **Perzisztens beállítások** (NVS): hangerő, fényerő, display-off timeout,

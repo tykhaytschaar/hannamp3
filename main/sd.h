@@ -15,10 +15,11 @@ typedef struct {
     char artist[96];    // ID3 TPE1/TP1 (UTF-8). Üres ha nincs ID3.
 } track_t;
 
-// Egy könyvtár-bejegyzés a böngészőhöz (almappa vagy .mp3 fájl).
+// Egy könyvtár-bejegyzés a böngészőhöz (almappa, zenefájl vagy m3u playlist).
 typedef struct {
     char name[128];   // a bejegyzés neve (mappánál a mappanév, fájlnál a fájlnév kiterjesztéssel)
-    bool is_dir;      // true = almappa, false = .mp3 fájl
+    bool is_dir;      // true = almappa
+    bool is_m3u;      // true = .m3u/.m3u8 playlist (a UI "Play all" sorként mutatja)
 } dir_entry_t;
 
 // Inicializálja a közös SPI buszt + felmountolja az SD-t /sdcard alatt.
@@ -44,10 +45,17 @@ int  sd_scan_tracks(track_t *tracks, int max_tracks);
 // <tracknév>.jpg → cover.jpg → folder.jpg. Igazat ad, ha talált.
 bool sd_find_album_art(const char *mp3_path, char *out_path, int out_path_len);
 
-// Böngészőhöz: egy könyvtár tartalma (almappák + .mp3 fájlok), NEM rekurzív.
-// Rendezés: előbb a mappák, aztán a fájlok, ábécé szerint. Visszaadja a db-ot.
+// Böngészőhöz: egy könyvtár tartalma (almappák + zenefájlok + m3u playlistek),
+// NEM rekurzív. Rendezés: m3u-k legelöl, aztán mappák, végül fájlok, ábécé
+// szerint. Visszaadja a db-ot.
 int sd_list_dir(const char *path, dir_entry_t *out, int max_entries);
 
 // Lejátszáshoz: egy könyvtár .mp3 fájljai track_t-ként (NEM rekurzív).
 // A track_t.album a mappa neve lesz. Visszaadja a db-ot.
 int sd_load_dir_tracks(const char *path, track_t *out, int max_tracks);
+
+// Egy .m3u/.m3u8 playlist betöltése track_t-ként, a lista SORRENDJÉBEN (nincs
+// újrarendezés — a prev/next és az auto-advance is ezt követi). Relatív utak
+// az m3u mappájához képest; "#" kommentek, CRLF, backslash és ".." kezelve.
+// A nem létező / nem lejátszható bejegyzések kimaradnak (log). Visszaadja a db-ot.
+int sd_load_m3u_tracks(const char *m3u_path, track_t *out, int max_tracks);
