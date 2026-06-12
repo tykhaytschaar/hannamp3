@@ -136,6 +136,7 @@ typedef enum {
     UI_SETTING_BACKLIGHT,
     UI_SETTING_IDLE_TIMEOUT,
     UI_SETTING_SLEEP,
+    UI_SETTING_ALBUM_END,
     UI_SETTING_COUNT
 } ui_setting_t;
 
@@ -144,6 +145,19 @@ typedef enum {
 void ui_set_sleep_enabled(bool enabled);
 bool ui_get_sleep_enabled(void);
 bool ui_toggle_sleep_enabled(void);   // visszaadja az új értéket
+
+// Album (lista) végi viselkedés — a player_task ez alapján dönt, amikor az
+// utolsó track is lejátszódott. A player.c menti NVS-be (alb_end key).
+typedef enum {
+    UI_ALBUM_END_STOP = 0,    // megállás (eddigi viselkedés)
+    UI_ALBUM_END_REPEAT,      // a lista újra elölről
+    UI_ALBUM_END_NEXT,        // következő testvérmappa abc-ben (körbefordul);
+                              // m3u listánál nem értelmezett → stop
+    UI_ALBUM_END_COUNT
+} ui_album_end_t;
+void ui_set_album_end_mode(int mode);
+int  ui_get_album_end_mode(void);
+int  ui_cycle_album_end_mode(void);   // Stop→Repeat→Next→Stop, visszaadja az újat
 
 // Lakat ikon a header-ben: állapot átkapcsolása. io_init hívja induláskor
 // + a switch változásakor.

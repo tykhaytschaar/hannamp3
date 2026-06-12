@@ -107,6 +107,13 @@ void player_toggle_sleep(void)
     persist_set_i32("sleep_en", en ? 1 : 0);
 }
 
+// Settings "Album end" sor tap: Stop→Repeat→Next album léptetés + NVS-mentés.
+void player_cycle_album_end(void)
+{
+    int m = ui_cycle_album_end_mode();
+    persist_set_i32("alb_end", m);
+}
+
 static void browser_refresh(void)
 {
     // FONTOS: itt NINCS NVS-írás. Régen minden mappa-navigáció persist_set_str-t
@@ -184,6 +191,32 @@ static void play_current(void)
 {
     select_current(true);
 }
+
+// A betöltött lista "album-szerű"-e: minden track ugyanabból a mappából való.
+// Mappa-betöltésnél triviálisan igaz; m3u-nál akkor, ha a playlist egyetlen
+// album számait sorolja — ilyenkor a "Next album" mód arra is értelmezett
+// (a mappa testvérei közt lép). Albumokon átívelő m3u-nál false → a lista
+// végén stop, a szélein a Next/Prev no-op.
+static bool list_is_single_folder(void)
+{
+    if (s_count <= 0) return false;
+    const char *p0 = s_tracks[0].path;
+    const char *s0 = strrchr(p0, '/');
+    if (!s0) return false;
+    size_t dlen = (size_t)(s0 - p0);
+    for (int i = 1; i < s_count; i++) {
+        const char *pi = s_tracks[i].path;
+        const char *si = strrchr(pi, '/');
+        if (!si || (size_t)(si - pi) != dlen || strncmp(pi, p0, dlen) != 0) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Szomszéd album betöltése (definíció a player_task előtt) — a gombkezelő is
+// hívja a lista határán, "Next album" módban.
+static bool advance_album(int dir, bool autoplay);
 
 // Play a böngészőben: mappán állva belép; m3u-n a playlist lesz a lejátszási
 // lista (a lista sorrendjében); fájlon a mappa MP3-jai, a kiválasztottól indítva.
@@ -335,8 +368,25 @@ void player_handle_button(btn_event_t evt)
             break;
         }
         bool was_playing = (st.state == AUDIO_STATE_PLAYING);
-        if (evt == BTN_EVT_NEXT) s_idx++;
-        else                     s_idx--;
+        bool fwd = (evt == BTN_EVT_NEXT);
+        // "Next album" módban a lista határán a léptetés albumhatáron lép át:
+        // Next az utolsó számon → következő album első száma, Prev az elsőn →
+        // előző album utolsó száma (a track-vége szabállyal azonos logika).
+        // Ha a szabály szerint nincs szomszéd album (albumokon átívelő m3u /
+        // gyökér-szintű lista), a léptetés itt NEM értelmezett: no-op, nincs
+        // wrap. Stop és Repeat módban marad a listán belüli körbefordulás.
+        bool at_edge = fwd ? (s_idx + 1 >= s_count) : (s_idx <= 0);
+        if (at_edge && s_count > 0 &&
+            ui_get_album_end_mode() == UI_ALBUM_END_NEXT) {
+            if (list_is_single_folder()) {
+                advance_album(fwd ? +1 : -1, was_playing);
+            } else {
+                ESP_LOGI(TAG, "lista szélén: több-mappás m3u — next/prev no-op");
+            }
+            break;
+        }
+        if (fwd) s_idx++;
+        else     s_idx--;
         if (was_playing) {
             // Folyamatos lejátszás: új track azonnal indul.
             play_current();
@@ -394,6 +444,69 @@ static void enter_deep_sleep(void)
     esp_deep_sleep_start();
 }
 
+// "Album end: Next album" mód: a játszott album szomszédos testvérmappája
+// abc-sorrendben (dir = +1 következő / -1 előző, körbefordul), amiben van
+// lejátszható fájl — betölti, és előre lépve az ELSŐ, visszafelé az UTOLSÓ
+// trackre áll. Teljes kör után a saját album jön újra (egyetlen albumnál ez
+// ismétlésként viselkedik). False, ha nincs jelölt (pl. gyökér-szintű lista).
+// autoplay=false (kézi léptetés álló lejátszásnál): csak kijelöl, nem indít —
+// mint a sima Next/Prev. Az album mappáját a track útvonalából vesszük, NEM
+// az s_bpath-ból: a böngésző közben máshol járhat.
+static bool advance_album(int dir, bool autoplay)
+{
+    if (s_count == 0) return false;
+
+    char album[sizeof(s_bpath)];
+    strncpy(album, s_tracks[0].path, sizeof(album) - 1);
+    album[sizeof(album) - 1] = 0;
+    char *slash = strrchr(album, '/');
+    if (!slash) return false;
+    *slash = 0;                                   // album mappa útvonala
+    const char *alb_name = strrchr(album, '/');
+    if (!alb_name || alb_name == album) return false;   // gyökér-szintű lista
+    size_t plen = (size_t)(alb_name - album);
+    alb_name++;                                   // a mappa neve
+
+    char parent[sizeof(s_bpath)];
+    memcpy(parent, album, plen);
+    parent[plen] = 0;
+
+    // Saját lista a testvérmappákról — az s_bentries a böngészőé, nem nyúlunk hozzá.
+    dir_entry_t *sibs = heap_caps_calloc(MAX_DIR_ENTRIES, sizeof(dir_entry_t),
+                                         MALLOC_CAP_SPIRAM);
+    if (!sibs) return false;
+    int n = sd_list_dir(parent, sibs, MAX_DIR_ENTRIES);
+
+    int cur = -1;
+    for (int i = 0; i < n; i++) {
+        if (sibs[i].is_dir && strcasecmp(sibs[i].name, alb_name) == 0) { cur = i; break; }
+    }
+
+    bool ok = false;
+    for (int step = 1; step <= n && !ok; step++) {
+        int i = (cur >= 0) ? ((cur + dir * step) % n + n) % n
+                           : (dir > 0 ? step - 1 : n - step);
+        if (!sibs[i].is_dir) continue;
+        char next_path[sizeof(s_bpath)];
+        snprintf(next_path, sizeof(next_path), "%.255s/%.127s", parent, sibs[i].name);
+        // Üres mappa nem bántja a betöltött listát (0 track = nem ír semmit).
+        int cnt = sd_load_dir_tracks(next_path, s_tracks, MAX_TRACKS);
+        if (cnt > 0) {
+            s_count = cnt;
+            s_idx   = (dir > 0) ? 0 : cnt - 1;
+            ESP_LOGI(TAG, "%s album: %s (%d track)",
+                     dir > 0 ? "Next" : "Prev", next_path, cnt);
+            // Mint a kézi léptetésnél: állóban az esetleg paused state-et
+            // eldobjuk, hogy a Play a friss kiválasztást indítsa.
+            if (!autoplay) audio_stop();
+            select_current(autoplay);
+            ok = true;
+        }
+    }
+    heap_caps_free(sibs);
+    return ok;
+}
+
 static void player_task(void *arg)
 {
     audio_state_t last_state = AUDIO_STATE_STOPPED;
@@ -404,16 +517,28 @@ static void player_task(void *arg)
         audio_status_t st;
         audio_get_status(&st);
 
-        // Auto-next ha végzett. Mappa végén megállunk loop helyett.
+        // Auto-next ha végzett. A lista végén az "Album end" beállítás dönt.
         if (st.state == AUDIO_STATE_FINISHED && last_state != AUDIO_STATE_FINISHED) {
-            if (s_idx + 1 >= s_count) {
-                ESP_LOGI(TAG, "End of folder (%d tracks), stopping", s_count);
-                audio_stop();
-                ui_set_state(AUDIO_STATE_STOPPED);
-                ui_set_progress(0, 0);
-            } else {
+            if (s_idx + 1 < s_count) {
                 s_idx++;
                 play_current();
+            } else {
+                int mode = ui_get_album_end_mode();
+                if (mode == UI_ALBUM_END_REPEAT && s_count > 0) {
+                    ESP_LOGI(TAG, "End of list — repeat");
+                    s_idx = 0;
+                    play_current();
+                } else if (mode == UI_ALBUM_END_NEXT && list_is_single_folder() &&
+                           advance_album(+1, true)) {
+                    // advance_album betöltötte és elindította a következő
+                    // albumot. (Albumokon átívelő m3u-ra nem értelmezett →
+                    // lent stop; az egy-mappás m3u albumként viselkedik.)
+                } else {
+                    ESP_LOGI(TAG, "End of list (%d tracks), stopping", s_count);
+                    audio_stop();
+                    ui_set_state(AUDIO_STATE_STOPPED);
+                    ui_set_progress(0, 0);
+                }
             }
         } else if (st.state == AUDIO_STATE_PLAYING) {
             if (st.position_ms / 500 != last_pos_print / 500) {
@@ -483,6 +608,15 @@ void player_start(void)
     int32_t saved_sleep_en = 0;
     persist_get_i32("sleep_en", &saved_sleep_en);
     ui_set_sleep_enabled(saved_sleep_en != 0);
+
+    // Album végi viselkedés visszaolvasása (default Stop).
+    int32_t saved_alb_end = UI_ALBUM_END_STOP;
+    if (persist_get_i32("alb_end", &saved_alb_end)) {
+        if (saved_alb_end < 0 || saved_alb_end >= UI_ALBUM_END_COUNT) {
+            saved_alb_end = UI_ALBUM_END_STOP;
+        }
+    }
+    ui_set_album_end_mode(saved_alb_end);
 
     // Háttérvilágítás fényerő visszaolvasása (default 100%). Csak beállítjuk
     // (nem mentjük újra); a tényleges felkapcsolás az ui_display_ready-ben.

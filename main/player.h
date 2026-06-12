@@ -22,6 +22,7 @@ void player_set_volume(uint8_t vol);
 // Settings tap-cycle sorok (touch): léptetés/váltás + NVS-mentés.
 void player_cycle_idle_timeout(void);   // "Display off" sor
 void player_toggle_sleep(void);         // "Sleep" sor
+void player_cycle_album_end(void);      // "Album end" sor (Stop/Repeat/Next album)
 
 // Now Playing transport gombok (touch). A 4 akció a fizikai gombok útjára
 // képződik le; a STOP új (audio_stop + UI reset). Alvó kijelzőn csak ébreszt.

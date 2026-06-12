@@ -94,6 +94,10 @@ static int  s_set_cursor  = 0;
 // Default false: a felhasználó kapcsolja be a Settings-ből.
 static bool s_sleep_enabled = false;
 
+// Album végi viselkedés (ui_album_end_t) — a player_task olvassa a lista
+// utolsó trackjének végén. Default: Stop (a korábbi viselkedés).
+static int s_album_end_mode = UI_ALBUM_END_STOP;
+
 typedef struct {
     // Screens
     lv_obj_t *scr[UI_SCREEN_COUNT];
@@ -124,6 +128,7 @@ typedef struct {
     lv_obj_t *set_val_battery;
     lv_obj_t *set_val_idle;
     lv_obj_t *set_val_sleep;
+    lv_obj_t *set_val_album_end;
     lv_obj_t *set_sld_volume;     // Settings volume slider
     lv_obj_t *set_sld_backlight;  // Settings brightness slider
     // Settings widgets — szerkeszthető sorok (kurzor + edit highlight ide kerül)
@@ -159,6 +164,7 @@ static void browser_rebuild_list(void);
 static void browser_apply_cursor(void);
 static void update_mini_playlist(void);
 static void idle_label_refresh_locked(void);
+static void album_end_label_refresh_locked(void);
 static void settings_render_cursor_locked(void);
 
 // -----------------------------------------------------------------------------
@@ -695,8 +701,18 @@ static void sleep_row_click(lv_event_t *e)
     settings_render_cursor_locked();
 }
 
-// USB Storage sor tap → újraindulás USB MSC módba. Alvó kijelzőn csak ébreszt
-// (mint a többi akció-sor), különben usb_msc_request_reboot() — ami beállítja a
+// "Album end" sor tap → Stop/Repeat/Next album léptetés (player.c menti NVS-be).
+static void album_end_row_click(lv_event_t *e)
+{
+    (void)e;
+    if (ui_user_activity()) return;
+    s_set_cursor = UI_SETTING_ALBUM_END;
+    player_cycle_album_end();
+    settings_render_cursor_locked();
+}
+
+// USB Storage gomb tap → újraindulás USB MSC módba. Alvó kijelzőn csak ébreszt
+// (mint a többi akció), különben usb_msc_request_reboot() — ami beállítja a
 // boot-flaget és azonnal újraindít (nem tér vissza).
 static void usb_storage_row_click(lv_event_t *e)
 {
@@ -775,20 +791,37 @@ static void build_settings(void)
     lv_obj_add_flag(U.set_row[UI_SETTING_SLEEP], LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(U.set_row[UI_SETTING_SLEEP], sleep_row_click,
                         LV_EVENT_CLICKED, NULL);
+    U.set_row[UI_SETTING_ALBUM_END] =
+        settings_row(panel, NULL, "Album end", &U.set_val_album_end);
+    lv_obj_add_flag(U.set_row[UI_SETTING_ALBUM_END], LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(U.set_row[UI_SETTING_ALBUM_END], album_end_row_click,
+                        LV_EVENT_CLICKED, NULL);
 
-    // USB Storage akció-sor: koppintásra újraindul USB MSC módba (az SD kártya
-    // külső meghajtóként a natív USB-n). Nem cursor-target (nincs az enum-ban).
-    {
-        lv_obj_t *usb_val = NULL;
-        lv_obj_t *usb_row = settings_row(panel, NULL, "USB Storage", &usb_val);
-        if (usb_val) lv_label_set_text(usb_val, "Tap");
-        lv_obj_add_flag(usb_row, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_add_event_cb(usb_row, usb_storage_row_click, LV_EVENT_CLICKED, NULL);
+    // Egységes bal indent a beállítás-sorokon. (Korábban a kurzor-render adta;
+    // a highlight megszűnt, az indent marad.)
+    for (int i = 0; i < UI_SETTING_COUNT; i++) {
+        if (U.set_row[i]) lv_obj_set_style_pad_left(U.set_row[i], 12, LV_PART_MAIN);
     }
-    if (U.set_val_idle)  idle_label_refresh_locked();   // induló érték kiírása
-    if (U.set_val_sleep) lv_label_set_text(U.set_val_sleep, s_sleep_enabled ? "On" : "Off");
 
-    settings_render_cursor_locked();   // induló kurzor a Volume-on
+    // USB Storage — gomb (akció, nem beállítás): koppintásra újraindul USB MSC
+    // módba (az SD kártya külső meghajtóként a natív USB-n). Szöveg-only: a
+    // saját fontokban nincs USB-glyph.
+    {
+        lv_obj_t *btn = lv_button_create(panel);
+        lv_obj_set_size(btn, lv_pct(100), 36);
+        lv_obj_set_style_bg_color(btn, COL_BG_PANEL_2, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(btn, 8, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(btn, 0, LV_PART_MAIN);
+        lv_obj_add_event_cb(btn, usb_storage_row_click, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_obj_set_style_text_color(lbl, COL_ACCENT, 0);
+        lv_label_set_text(lbl, "USB Storage");
+        lv_obj_center(lbl);
+    }
+    if (U.set_val_idle)      idle_label_refresh_locked();   // induló értékek
+    if (U.set_val_sleep)     lv_label_set_text(U.set_val_sleep, s_sleep_enabled ? "On" : "Off");
+    if (U.set_val_album_end) album_end_label_refresh_locked();
 }
 
 // -----------------------------------------------------------------------------
@@ -1489,25 +1522,14 @@ int ui_cycle_idle_timeout(int dir)
 //             így a szöveg ugyanott marad mint kurzor nélkül; a csík és a
 //             szöveg közt ~9 px térköz)
 //   - edit:   teljes COL_ACCENT háttér, fekete szöveg — maximális kontraszt
-// Touch-átállás óta nincs edit-mód: a kurzor csak vizuális (a legutóbb
-// érintett soron egy 3px bal accent-csík). Nincs gyerek-átszínezés, így a
-// slider sorokra (3 gyerek) is biztonságos.
+// Touch-átállás óta a kurzornak nincs funkciója, ezért a highlight rajzolása
+// MEGSZŰNT — a függvény és a hívásai (s_set_cursor karbantartással együtt)
+// szándékosan megmaradtak: a gombos vezérlés későbbi, átfogó újratervezésekor
+// (külön commit) ide tér majd vissza a vizuális jelölés. A sorok fix bal
+// indentje (12 px) a build_settings-ben van beállítva.
 static void settings_render_cursor_locked(void)
 {
-    for (int i = 0; i < UI_SETTING_COUNT; i++) {
-        lv_obj_t *row = U.set_row[i];
-        if (!row) continue;
-        if (i == s_set_cursor) {
-            lv_obj_set_style_border_color(row, COL_ACCENT, 0);
-            lv_obj_set_style_border_width(row, 3, 0);
-            lv_obj_set_style_border_side(row, LV_BORDER_SIDE_LEFT, 0);
-            lv_obj_set_style_radius(row, 4, 0);
-            lv_obj_set_style_pad_left(row, 9, 0);   // 3 + 9 = 12 a tartalomig
-        } else {
-            lv_obj_set_style_border_width(row, 0, 0);
-            lv_obj_set_style_pad_left(row, 12, 0);
-        }
-    }
+    // szándékosan üres — lásd fent
 }
 
 void ui_set_sleep_enabled(bool enabled)
@@ -1524,6 +1546,33 @@ bool ui_toggle_sleep_enabled(void)
 {
     ui_set_sleep_enabled(!s_sleep_enabled);
     return s_sleep_enabled;
+}
+
+// --- Album végi viselkedés (Settings "Album end" tap-cycle sor) -------------
+static void album_end_label_refresh_locked(void)
+{
+    if (!U.set_val_album_end) return;
+    static const char *labels[UI_ALBUM_END_COUNT] = { "Stop", "Repeat", "Next album" };
+    int m = s_album_end_mode;
+    if (m < 0 || m >= UI_ALBUM_END_COUNT) m = UI_ALBUM_END_STOP;
+    lv_label_set_text(U.set_val_album_end, labels[m]);
+}
+
+void ui_set_album_end_mode(int mode)
+{
+    if (mode < 0 || mode >= UI_ALBUM_END_COUNT) mode = UI_ALBUM_END_STOP;
+    s_album_end_mode = mode;
+    lvgl_port_lock(0);
+    album_end_label_refresh_locked();
+    lvgl_port_unlock();
+}
+
+int ui_get_album_end_mode(void) { return s_album_end_mode; }
+
+int ui_cycle_album_end_mode(void)
+{
+    ui_set_album_end_mode((s_album_end_mode + 1) % UI_ALBUM_END_COUNT);
+    return s_album_end_mode;
 }
 
 void ui_set_locked(bool locked)

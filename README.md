@@ -35,7 +35,11 @@ bekötés: [PINOUT.md](PINOUT.md), hátralévő bekötések: [WIRING_TODO.md](WI
     albumokon átívelő listák is működnek (a relatív utak az m3u mappájához
     képest értendők, a hibás sorok kimaradnak)
   - *Settings* — Battery, Volume- és Brightness-slider, Display off,
-    Sleep, USB Storage
+    Sleep, Album end (Stop / Repeat / Next album — utóbbi az album
+    testvérmappái közt lép abc-sorrendben, körbefordulva; az egy mappából
+    építkező m3u albumként viselkedik, az albumokon átívelő m3u végén stop).
+    Next album módban a kézi Next/Prev is albumhatáron lép át a lista szélén
+    (több-mappás m3u-nál ott no-op). USB Storage gomb
 - **Perzisztens beállítások** (NVS): hangerő, fényerő, display-off timeout,
   sleep engedély
 - **Energiagazdálkodás**: display-off tétlenség után (10/15/30 s / never,
