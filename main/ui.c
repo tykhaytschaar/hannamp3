@@ -125,7 +125,6 @@ typedef struct {
     // Settings widgets — value labelek
     lv_obj_t *set_val_volume;
     lv_obj_t *set_val_backlight;
-    lv_obj_t *set_val_battery;
     lv_obj_t *set_val_idle;
     lv_obj_t *set_val_sleep;
     lv_obj_t *set_val_album_end;
@@ -662,7 +661,8 @@ static lv_obj_t *settings_slider_row(lv_obj_t *parent, const char *icon,
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_START,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_ver(row, 2, LV_PART_MAIN);
+    // 8 px függőleges pad: nagyobb sormagasság = nagyobb tap-célfelület.
+    lv_obj_set_style_pad_ver(row, 8, LV_PART_MAIN);
     lv_obj_set_style_pad_column(row, 10, LV_PART_MAIN);
 
     lv_obj_t *left = lv_label_create(row);
@@ -673,13 +673,21 @@ static lv_obj_t *settings_slider_row(lv_obj_t *parent, const char *icon,
     lv_obj_set_width(left, 120);              // fix → a sliderek egy vonalban
     lv_obj_set_style_text_color(left, COL_TEXT_DIM, 0);
 
+    // Knob nélküli csúszka: a szintet az accent (aktív) és a sötét-cyan
+    // (inaktív) sáv határa mutatja — a kör kilógott a sorból (felül lecsapva),
+    // és vizuálisan sem kell. Vastagabb sáv + kiterjesztett találati zóna,
+    // hogy ujjal könnyű legyen eltalálni (a húzás a sáv bármely pontján megy).
     lv_obj_t *sld = lv_slider_create(row);
     lv_obj_set_flex_grow(sld, 1);
+    lv_obj_set_height(sld, 12);
     lv_slider_set_range(sld, 0, 100);
     lv_slider_set_value(sld, init_val, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(sld, COL_BG_PANEL_2, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(sld, COL_ACCENT_DIM, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(sld, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_bg_color(sld, COL_ACCENT, LV_PART_INDICATOR);
-    lv_obj_set_style_bg_color(sld, COL_ACCENT, LV_PART_KNOB);
+    lv_obj_set_style_bg_opa(sld, LV_OPA_TRANSP, LV_PART_KNOB);
+    lv_obj_set_style_pad_all(sld, 0, LV_PART_KNOB);   // a (láthatatlan) knob ne lógjon túl
+    lv_obj_set_ext_click_area(sld, 14);               // +14 px találati zóna körben
     lv_obj_add_event_cb(sld, cb, LV_EVENT_VALUE_CHANGED, NULL);
     lv_obj_add_event_cb(sld, cb, LV_EVENT_RELEASED, NULL);
     if (out_slider) *out_slider = sld;
@@ -742,7 +750,8 @@ static lv_obj_t *settings_row(lv_obj_t *parent, const char *icon, const char *la
     lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
     lv_obj_set_flex_align(row, LV_FLEX_ALIGN_SPACE_BETWEEN,
                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-    lv_obj_set_style_pad_ver(row, 2, LV_PART_MAIN);
+    // 8 px függőleges pad: nagyobb sormagasság = nagyobb tap-célfelület.
+    lv_obj_set_style_pad_ver(row, 8, LV_PART_MAIN);
 
     lv_obj_t *left = lv_label_create(row);
     char buf[64];
@@ -767,22 +776,6 @@ static void build_settings(void)
     lv_obj_align(panel, LV_ALIGN_TOP_LEFT, 12, 32);
     lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_style_pad_row(panel, 6, LV_PART_MAIN);
-
-    // Sorrend: fent a nem-szerkeszthetők, alul a szerkeszthetők (kurzor csak
-    // az utóbbiakon mozog). Egy blokk, vizuális szeparátor nélkül.
-
-    // "Info" sor — nincs value oldal, csak a szöveg balra.
-    {
-        lv_obj_t *info = lv_obj_create(panel);
-        lv_obj_remove_style_all(info);
-        lv_obj_set_size(info, lv_pct(100), LV_SIZE_CONTENT);
-        lv_obj_set_style_pad_ver(info, 2, LV_PART_MAIN);
-        lv_obj_t *lbl = lv_label_create(info);
-        lv_label_set_text(lbl, "HANNAMP3 2026");
-        lv_obj_set_style_text_color(lbl, COL_TEXT_DIM, 0);
-    }
-
-    settings_row(panel, LV_SYMBOL_BATTERY_FULL, "Battery", &U.set_val_battery);
 
     // Kezdőérték placeholder (70) — a player_start ui_set_volume(saved)-del
     // szinkronizálja. FONTOS: itt NEM hívunk audio_get_volume()-ot, mert az
@@ -1649,9 +1642,7 @@ void ui_set_battery(uint16_t mv, uint8_t percent)
     if (U.ovr_battery) {
         lv_label_set_text_fmt(U.ovr_battery, "%s %u%%", sym, percent);
     }
-    if (U.set_val_battery) {
-        lv_label_set_text_fmt(U.set_val_battery, "%u%% (%u mV)", percent, mv);
-    }
+    (void)mv;   // a Settings Battery sor megszűnt — az mV csak oda került ki
     lvgl_port_unlock();
 }
 
