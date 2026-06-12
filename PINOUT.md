@@ -4,23 +4,37 @@ ESP32-S3-DevKitC-1 N16R8 lábkiosztása a projekthez. A táblázatok a fizikai
 bekötést tükrözik. A kódbéli definíciók a [`main/app_config.h`](main/app_config.h)
 fájlban vannak.
 
-## Gombok (6 db)
+## Gombok (9 db) — játék-orientált kiosztás
 
 Minden gomb egyik lába a megfelelő GPIO-ra, a **diagonálisan átellenes** lába
-GND-re. Belső pull-up engedélyezve, lenyomáskor LOW.
+GND-re. Belső pull-up engedélyezve, lenyomáskor LOW. A nevek a Game Boy
+layoutot követik (D-pad + A/B/Start/Select + Menu); a player-funkciók erre
+képeződnek le.
 
-| Gomb | ESP32-S3 GPIO | Funkció |
-|---|---|---|
-| **Menu** | **GPIO 1** | Screen váltás (rövid) / SD újraolvasás (hosszú). RTC-capable → deep sleep wake forrás (500 ms hold-press szükséges) |
-| **Next** | **GPIO 2** | Következő szám |
-| **Prev** | **GPIO 42** | Előző szám |
-| **Play / Pause** | **GPIO 41** | Lejátszás indítása vagy szüneteltetése |
-| **Vol +** | **GPIO 38** | Hangerő +5% / Settings kurzor fel / edit-en belül érték + |
-| **Vol −** | **GPIO 39** | Hangerő −5% / Settings kurzor le / edit-en belül érték − |
-| **Lock** (tolókapcsoló) | **GPIO 17** | Slide switch. GND-re zár (LOW) = locked, minden gomb-event eldobódik |
+| Gomb | ESP32-S3 GPIO | Player-funkció | Játék-funkció |
+|---|---|---|---|
+| **Menu** | **GPIO 1** | — (deep sleep wake, 500 ms hold) | Kilépés a játékból |
+| **Right** | **GPIO 2** | Következő szám / Library: belép | D-pad jobbra |
+| **Left** | **GPIO 42** | Előző szám / Library: fel | D-pad balra |
+| **A** | **GPIO 41** | Play / Pause | A (tűz/akció) |
+| **Up** | **GPIO 38** | Hangerő + / Library: kurzor fel | D-pad fel |
+| **Down** | **GPIO 39** | Hangerő − / Library: kurzor le | D-pad le |
+| **B** | **GPIO 48** | — | B |
+| **Start** | **GPIO 3** | — | Start |
+| **Select** | **GPIO 0** | — | Select |
+| **Lock** (tolókapcsoló) | **GPIO 17** | Slide switch. GND-re zár (LOW) = locked, minden gomb-event eldobódik | |
 
-A `Vol +` és `Vol −` támogat **hold-to-repeat**-et: nyomva tartva ~120 ms-onként
-újra-kiadja az eventet.
+Az `Up` és `Down` támogat **hold-to-repeat**-et: nyomva tartva ~120 ms-onként
+újra-kiadja az eventet (hangerő-rámpa).
+
+Az új gombok lábainak strap-megkötései:
+- **GPIO 48**: az onboard RGB LED DIN lába — a firmware nem hajtja, bemenetnek
+  szabad (a gomb a LED nagyimpedanciás bemenetét húzza GND-re, ártalmatlan).
+- **GPIO 3**: JTAG-sel strap — égetetlen eFuse (default) mellett közömbös.
+- **GPIO 0**: BOOT strap — futás közben szabad; ha reset közben nyomva van,
+  download módba bootol (a devkit BOOT gombja is ezen ül, párhuzamosan OK).
+- A **GPIO 45/46 tilos** gombnak: a 45 a VDD_SPI feszültség-strap (pull-up
+  mellett 1,8 V-ra húzná a flash-t), a 46 a boot-mód strapje.
 
 ## ST7796U 3.5" (480×320) kijelző + FT6336 touch + microSD slot
 
@@ -110,9 +124,9 @@ Jelenleg lebeg — random érték a UI-n. Funkcionálisan nem zavaró.
 - **GPIO 43, 44** — UART0 RX/TX (a COMM/UART port soros logja, ne használd
   gombnak)
 
-Jelenleg használt szabad lábak: **15, 18** (touch I2C), **47** (touch RST).
-Az **egyetlen szabadon maradt** láb a **GPIO 48** (onboard RGB LED — a firmware
-nem használja).
+Jelenleg használt szabad lábak: **15, 18** (touch I2C), **47** (touch RST),
+**48, 3, 0** (B / Start / Select gombok). Szabad láb nem maradt — további
+bővítéshez I2C-s GPIO-expander vagy a strap-lábak felülvizsgálata kell.
 
 ## Tápellátás
 

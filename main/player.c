@@ -299,9 +299,9 @@ void player_browser_play_all(void)
 void player_do_action(player_action_t a)
 {
     switch (a) {
-    case PLAYER_ACTION_PREV:       player_handle_button(BTN_EVT_PREV);       break;
-    case PLAYER_ACTION_PLAY_PAUSE: player_handle_button(BTN_EVT_PLAY_PAUSE); break;
-    case PLAYER_ACTION_NEXT:       player_handle_button(BTN_EVT_NEXT);       break;
+    case PLAYER_ACTION_PREV:       player_handle_button(BTN_EVT_LEFT);       break;
+    case PLAYER_ACTION_PLAY_PAUSE: player_handle_button(BTN_EVT_A); break;
+    case PLAYER_ACTION_NEXT:       player_handle_button(BTN_EVT_RIGHT);       break;
     case PLAYER_ACTION_STOP:
         if (ui_user_activity()) return;     // alvó kijelző: a tap csak ébreszt
         audio_stop();
@@ -368,7 +368,7 @@ void player_handle_button(btn_event_t evt)
     ui_screen_t scr = ui_current_screen();
 
     switch (evt) {
-    case BTN_EVT_PLAY_PAUSE:
+    case BTN_EVT_A:
         if (scr == UI_SCREEN_SETTINGS) {
             // A Settings oldalon a PLAY semmit nem csinál — ne indítson zenét
             // és ne legyen mentés-funkció sem (az érték állítás auto-save).
@@ -388,8 +388,8 @@ void player_handle_button(btn_event_t evt)
         }
         break;
 
-    case BTN_EVT_NEXT:
-    case BTN_EVT_PREV: {
+    case BTN_EVT_RIGHT:
+    case BTN_EVT_LEFT: {
         if (scr == UI_SCREEN_SETTINGS) {
             // Settings touch-vezérelt (sliderek + tap-cycle sorok) — a
             // Next/Prev gombnak itt nincs funkciója.
@@ -397,12 +397,12 @@ void player_handle_button(btn_event_t evt)
         }
         if (scr == UI_SCREEN_LIBRARY) {
             // Library böngésző: Next = be a mappába, Prev = ki a szülőbe.
-            if (evt == BTN_EVT_NEXT) browser_enter();
+            if (evt == BTN_EVT_RIGHT) browser_enter();
             else                     browser_up();
             break;
         }
         bool was_playing = (st.state == AUDIO_STATE_PLAYING);
-        bool fwd = (evt == BTN_EVT_NEXT);
+        bool fwd = (evt == BTN_EVT_RIGHT);
         // "Next album" módban a lista határán a léptetés albumhatáron lép át:
         // Next az utolsó számon → következő album első száma, Prev az elsőn →
         // előző album utolsó száma (a track-vége szabállyal azonos logika).
@@ -441,9 +441,15 @@ void player_handle_button(btn_event_t evt)
         // wake-forrás (RTC GPIO 1, lásd main.c).
         break;
 
-    case BTN_EVT_VOL_UP:
-    case BTN_EVT_VOL_DOWN: {
-        int dir = (evt == BTN_EVT_VOL_UP) ? +1 : -1;
+    case BTN_EVT_B:
+    case BTN_EVT_START:
+    case BTN_EVT_SELECT:
+        // Játék-gombok — a player módban (egyelőre) nincs funkciójuk.
+        break;
+
+    case BTN_EVT_UP:
+    case BTN_EVT_DOWN: {
+        int dir = (evt == BTN_EVT_UP) ? +1 : -1;
         if (scr == UI_SCREEN_LIBRARY) {
             browser_move_cursor(-dir);   // VolUp = kurzor fel
             break;

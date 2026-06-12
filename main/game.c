@@ -74,11 +74,11 @@ static const char *TAG = "game";
 // (io_button_down) — az eseményalapú út csak press-t ad, a CHIP-8-nak
 // tartás-állapot kell (EX9E/EXA1).
 static const struct { btn_event_t evt; int key; } KEYMAP[] = {
-    { BTN_EVT_PREV,       0x4 },
-    { BTN_EVT_NEXT,       0x6 },
-    { BTN_EVT_PLAY_PAUSE, 0x5 },
-    { BTN_EVT_VOL_UP,     0x2 },
-    { BTN_EVT_VOL_DOWN,   0x8 },
+    { BTN_EVT_LEFT,       0x4 },
+    { BTN_EVT_RIGHT,       0x6 },
+    { BTN_EVT_A, 0x5 },
+    { BTN_EVT_UP,     0x2 },
+    { BTN_EVT_DOWN,   0x8 },
 };
 
 // --- Game screen állapot ---

@@ -36,16 +36,25 @@
 #define PIN_TOUCH_RST       GPIO_NUM_47
 
 // -----------------------------------------------------------------------------
-// Gombok (mind GND-re zárnak, belső pull-up)
+// Gombok (mind GND-re zárnak, belső pull-up) — játék-orientált nevek
+// (Game Boy layout: D-pad + A/B/Start/Select + Menu). A player-funkciók
+// leképezése: A = play/pause, Right/Left = next/prev, Up/Down = hangerő.
 // -----------------------------------------------------------------------------
 // MENU GPIO 1-en (RTC-capable), hogy deep sleep-ből EXT1 wake-forrás lehessen.
-// PLAY átkerült GPIO 41-re.
 #define PIN_BTN_MENU        GPIO_NUM_1
-#define PIN_BTN_NEXT        GPIO_NUM_2
-#define PIN_BTN_PREV        GPIO_NUM_42
-#define PIN_BTN_PLAY        GPIO_NUM_41
-#define PIN_BTN_VOL_UP      GPIO_NUM_38
-#define PIN_BTN_VOL_DOWN    GPIO_NUM_39
+#define PIN_BTN_RIGHT       GPIO_NUM_2     // volt: NEXT
+#define PIN_BTN_LEFT        GPIO_NUM_42    // volt: PREV
+#define PIN_BTN_A           GPIO_NUM_41    // volt: PLAY
+#define PIN_BTN_UP          GPIO_NUM_38    // volt: VOL_UP
+#define PIN_BTN_DOWN        GPIO_NUM_39    // volt: VOL_DOWN
+// Új gombok (B / Start / Select) — strap-megkötésekkel választott lábak:
+//   GPIO 48: onboard RGB LED DIN — a firmware nem hajtja, bemenetnek szabad
+//   GPIO 3:  JTAG-sel strap — default (égetetlen) eFuse mellett közömbös
+//   GPIO 0:  BOOT strap — futás közben szabad; reset közben nyomva tartva
+//            download mód (a devkit BOOT gombja is ezen ül, párhuzamosan OK)
+#define PIN_BTN_B           GPIO_NUM_48
+#define PIN_BTN_START       GPIO_NUM_3
+#define PIN_BTN_SELECT      GPIO_NUM_0
 
 // Lakat tolókapcsoló (slide switch) — egyik állása GND felé zár (LOW = lock).
 // Pull-up belül, polling 100 ms-onként debounce-szal.

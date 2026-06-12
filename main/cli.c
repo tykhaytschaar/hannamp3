@@ -52,11 +52,15 @@ static void cli_dispatch(const char *cmd, const char *param)
     if (game_is_active()) {
         btn_event_t gevt;
         bool mapped = true;
-        if      (strcmp(cmd, "play") == 0) gevt = BTN_EVT_PLAY_PAUSE;
-        else if (strcmp(cmd, "next") == 0) gevt = BTN_EVT_NEXT;
-        else if (strcmp(cmd, "prev") == 0) gevt = BTN_EVT_PREV;
-        else if (strcmp(cmd, "vol") == 0 && strcmp(param, "up") == 0)   gevt = BTN_EVT_VOL_UP;
-        else if (strcmp(cmd, "vol") == 0 && strcmp(param, "down") == 0) gevt = BTN_EVT_VOL_DOWN;
+        if      (strcmp(cmd, "play") == 0)   gevt = BTN_EVT_A;
+        else if (strcmp(cmd, "a") == 0)      gevt = BTN_EVT_A;
+        else if (strcmp(cmd, "b") == 0)      gevt = BTN_EVT_B;
+        else if (strcmp(cmd, "start") == 0)  gevt = BTN_EVT_START;
+        else if (strcmp(cmd, "select") == 0) gevt = BTN_EVT_SELECT;
+        else if (strcmp(cmd, "next") == 0)   gevt = BTN_EVT_RIGHT;
+        else if (strcmp(cmd, "prev") == 0)   gevt = BTN_EVT_LEFT;
+        else if (strcmp(cmd, "vol") == 0 && strcmp(param, "up") == 0)   gevt = BTN_EVT_UP;
+        else if (strcmp(cmd, "vol") == 0 && strcmp(param, "down") == 0) gevt = BTN_EVT_DOWN;
         else mapped = false;
         if (mapped) {
             game_handle_button(gevt);
@@ -71,12 +75,12 @@ static void cli_dispatch(const char *cmd, const char *param)
     if (strcmp(cmd, "play") == 0) {
         ESP_LOGI(TAG, "play");
         if (st.state != AUDIO_STATE_PLAYING) {
-            player_handle_button(BTN_EVT_PLAY_PAUSE);
+            player_handle_button(BTN_EVT_A);
         }
     } else if (strcmp(cmd, "pause") == 0) {
         ESP_LOGI(TAG, "pause");
         if (st.state == AUDIO_STATE_PLAYING) {
-            player_handle_button(BTN_EVT_PLAY_PAUSE);
+            player_handle_button(BTN_EVT_A);
         }
     } else if (strcmp(cmd, "stop") == 0) {
         ESP_LOGI(TAG, "stop");
@@ -85,10 +89,10 @@ static void cli_dispatch(const char *cmd, const char *param)
         ui_set_progress(0, 0);
     } else if (strcmp(cmd, "next") == 0) {
         ESP_LOGI(TAG, "next");
-        player_handle_button(BTN_EVT_NEXT);
+        player_handle_button(BTN_EVT_RIGHT);
     } else if (strcmp(cmd, "prev") == 0) {
         ESP_LOGI(TAG, "prev");
-        player_handle_button(BTN_EVT_PREV);
+        player_handle_button(BTN_EVT_LEFT);
     } else if (strcmp(cmd, "screen") == 0) {
         if (strcmp(param, "next") == 0) {
             ESP_LOGI(TAG, "screen next");
@@ -102,10 +106,10 @@ static void cli_dispatch(const char *cmd, const char *param)
     } else if (strcmp(cmd, "vol") == 0) {
         if (strcmp(param, "up") == 0) {
             ESP_LOGI(TAG, "vol up");
-            player_handle_button(BTN_EVT_VOL_UP);
+            player_handle_button(BTN_EVT_UP);
         } else if (strcmp(param, "down") == 0) {
             ESP_LOGI(TAG, "vol down");
-            player_handle_button(BTN_EVT_VOL_DOWN);
+            player_handle_button(BTN_EVT_DOWN);
         } else if (strcmp(param, "max") == 0) {
             ESP_LOGI(TAG, "vol max");
             set_volume(100);

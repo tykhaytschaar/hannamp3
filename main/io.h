@@ -3,14 +3,20 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+// Játék-orientált gombnevek (GB-layout). A player-oldali jelentésük:
+// A = play/pause, Right/Left = next/prev (Library: belép/fel), Up/Down =
+// hangerő (Library: kurzor); B/Start/Select a playerben (még) no-op.
 typedef enum {
-    BTN_EVT_PLAY_PAUSE,
-    BTN_EVT_NEXT,
-    BTN_EVT_PREV,
+    BTN_EVT_A,          // volt: PLAY_PAUSE
+    BTN_EVT_B,
+    BTN_EVT_UP,         // volt: VOL_UP
+    BTN_EVT_DOWN,       // volt: VOL_DOWN
+    BTN_EVT_LEFT,       // volt: PREV
+    BTN_EVT_RIGHT,      // volt: NEXT
+    BTN_EVT_START,
+    BTN_EVT_SELECT,
     BTN_EVT_MENU,
     BTN_EVT_MENU_LONG,  // MENU long press — rescan SD (player.c kezeli)
-    BTN_EVT_VOL_UP,
-    BTN_EVT_VOL_DOWN,
 } btn_event_t;
 
 // Callback típus: a player.c regisztrál rá.

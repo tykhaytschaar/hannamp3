@@ -167,13 +167,16 @@ bool io_is_locked(void) { return s_locked; }
 static int evt_to_gpio(btn_event_t evt)
 {
     switch (evt) {
-    case BTN_EVT_PLAY_PAUSE: return PIN_BTN_PLAY;
-    case BTN_EVT_NEXT:       return PIN_BTN_NEXT;
-    case BTN_EVT_PREV:       return PIN_BTN_PREV;
+    case BTN_EVT_A:         return PIN_BTN_A;
+    case BTN_EVT_B:         return PIN_BTN_B;
+    case BTN_EVT_UP:        return PIN_BTN_UP;
+    case BTN_EVT_DOWN:      return PIN_BTN_DOWN;
+    case BTN_EVT_LEFT:      return PIN_BTN_LEFT;
+    case BTN_EVT_RIGHT:     return PIN_BTN_RIGHT;
+    case BTN_EVT_START:     return PIN_BTN_START;
+    case BTN_EVT_SELECT:    return PIN_BTN_SELECT;
     case BTN_EVT_MENU:
-    case BTN_EVT_MENU_LONG:  return PIN_BTN_MENU;
-    case BTN_EVT_VOL_UP:     return PIN_BTN_VOL_UP;
-    case BTN_EVT_VOL_DOWN:   return PIN_BTN_VOL_DOWN;
+    case BTN_EVT_MENU_LONG: return PIN_BTN_MENU;
     }
     return -1;
 }
@@ -186,12 +189,15 @@ bool io_button_down(btn_event_t evt)
 
 void io_init(void)
 {
-    setup_button(PIN_BTN_PLAY,     BTN_EVT_PLAY_PAUSE, false);
-    setup_button(PIN_BTN_NEXT,     BTN_EVT_NEXT,       false);
-    setup_button(PIN_BTN_PREV,     BTN_EVT_PREV,       false);
-    setup_menu_button(PIN_BTN_MENU);                              // short + long
-    setup_button(PIN_BTN_VOL_UP,   BTN_EVT_VOL_UP,     true);   // hold = ramp
-    setup_button(PIN_BTN_VOL_DOWN, BTN_EVT_VOL_DOWN,   true);
+    setup_button(PIN_BTN_A,      BTN_EVT_A,      false);
+    setup_button(PIN_BTN_B,      BTN_EVT_B,      false);
+    setup_button(PIN_BTN_RIGHT,  BTN_EVT_RIGHT,  false);
+    setup_button(PIN_BTN_LEFT,   BTN_EVT_LEFT,   false);
+    setup_button(PIN_BTN_START,  BTN_EVT_START,  false);
+    setup_button(PIN_BTN_SELECT, BTN_EVT_SELECT, false);
+    setup_menu_button(PIN_BTN_MENU);                       // short + long
+    setup_button(PIN_BTN_UP,     BTN_EVT_UP,     true);    // hold = vol ramp
+    setup_button(PIN_BTN_DOWN,   BTN_EVT_DOWN,   true);
 
     // ---- ADC1 oneshot a battery-hez ----
     adc_oneshot_unit_init_cfg_t u = { .unit_id = ADC_UNIT_1, .ulp_mode = ADC_ULP_MODE_DISABLE };
