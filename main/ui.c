@@ -952,13 +952,30 @@ static void update_mini_playlist(void)
         return;
     }
 
+    // Vegyes lista (albumokon átívelő m3u)? Akkor a cím önmagában kevés —
+    // "Előadó · Cím" formátumot használunk, ahol van artist.
+    bool mixed = false;
+    for (int i = 1; i < U.lib_count; i++) {
+        if (strcasecmp(U.lib_tracks[i].album, U.lib_tracks[0].album) != 0) {
+            mixed = true;
+            break;
+        }
+    }
+
     // ÖSSZES track (nem ablakos) — a lista scrollozható. A currently-playing
     // sor: 3px bal accent stripe + tompa bg, és scroll-to-view rá.
+    // Sorfelirat: ID3-cím (fallback: fájlnév, pl. tag nélküli WAV-oknál).
     lv_obj_t *cur_row = NULL;
     for (int i = 0; i < U.lib_count; i++) {
         bool is_playing = (i == U.lib_current);
-        lv_obj_t *btn = lv_list_add_button(U.np_mini_list, LV_SYMBOL_AUDIO,
-                                           U.lib_tracks[i].name);
+        const track_t *tr = &U.lib_tracks[i];
+        const char *text = tr->title[0] ? tr->title : tr->name;
+        char line[256];
+        if (mixed && tr->artist[0] && tr->title[0]) {
+            snprintf(line, sizeof(line), "%s \xC2\xB7 %s", tr->artist, tr->title);
+            text = line;
+        }
+        lv_obj_t *btn = lv_list_add_button(U.np_mini_list, LV_SYMBOL_AUDIO, text);
         lv_obj_set_user_data(btn, (void *)(intptr_t)i);
         lv_obj_add_event_cb(btn, np_tlist_click, LV_EVENT_CLICKED, NULL);
         // Az lv_list gombok alapból alsó keretet (divider) kapnak a témától —
