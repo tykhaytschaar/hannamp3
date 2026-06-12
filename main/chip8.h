@@ -27,6 +27,13 @@ typedef struct {
                         // false = eredeti (I a végén X+1-gyel nő)
 } chip8_quirks_t;
 
+// A VM-állapot mérete (~6 KB). A magnak nincs saját statikus állapota — a
+// hívó allokálja a munkaterületet (tipikusan PSRAM-ból: a belső RAM-ot az
+// LVGL DMA-bufferei kifeszítik), és chip8_attach-csel köti be. Minden API
+// no-op / hibát ad, amíg nincs bekötött állapot.
+size_t chip8_state_bytes(void);
+void   chip8_attach(void *state_mem);
+
 // Teljes reset (RAM, regiszterek, framebuffer, gombok) + quirk-beállítás.
 // q == NULL → default: CHIP-48/SCHIP profil (shift_vx + ldstr_keep_i) — a
 // klasszikus 90-es évekbeli játékpakkok (Invaders, Tetris, Brix...) ezt várják.

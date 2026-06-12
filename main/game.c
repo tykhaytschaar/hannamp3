@@ -81,6 +81,9 @@ static struct {
     // CLI-ből injektált kulcs-tapek: kulcsonként hátralévő "lenyomva" tickek
     // (game_handle_button tölti, a poll_keys csorgatja le).
     uint8_t         inject[CHIP8_KEYS];
+    // A CHIP-8 VM munkaterülete (PSRAM, lásd chip8_attach) — első indításkor
+    // allokáljuk, utána megtartjuk (~6 KB, nem éri meg ciklikusan szabadítani).
+    void           *vm;
 } G;
 
 // --- Game picker állapot ---
@@ -275,6 +278,16 @@ static void game_tick_cb(lv_timer_t *t)
 bool game_start(const char *rom_path, game_exit_cb_t on_exit)
 {
     if (G.active) return false;
+
+    // VM-állapot PSRAM-ból — a belső RAM-ot (LVGL DMA-bufferek) nem terheljük.
+    if (!G.vm) {
+        G.vm = heap_caps_malloc(chip8_state_bytes(), MALLOC_CAP_SPIRAM);
+        if (!G.vm) {
+            ESP_LOGE(TAG, "VM state alloc failed");
+            return false;
+        }
+        chip8_attach(G.vm);
+    }
 
     // ROM beolvasása RAM-ba — a játék alatt nincs több SD-hozzáférés, így a
     // közös SPI buszon sem versenyzünk a kijelzővel. Az fread a flush-okkal
