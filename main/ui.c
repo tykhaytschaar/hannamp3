@@ -1134,13 +1134,13 @@ void ui_browser_show(const char *path, const dir_entry_t *entries,
     U.br_entries = entries;
     U.br_count   = count;
     U.br_cursor  = cursor;
-    // Parent ".." sor csak ha nem a gyökérben vagyunk (pontos egyezés kell).
-    s_lib_show_parent = (strcmp(path, SD_MOUNT_POINT) != 0);
+    // Parent ".." sor csak ha nem a böngésző-gyökérben (MUSIC_DIR) vagyunk.
+    s_lib_show_parent = (strcmp(path, MUSIC_DIR) != 0);
     if (U.lib_path) {
-        // A /sdcard prefixet elhagyjuk, hogy rövidebb legyen; gyökérnél "/"
+        // A /sdcard/music prefixet elhagyjuk, hogy rövidebb legyen; gyökérnél "/"
         const char *disp = path;
-        size_t mlen = strlen(SD_MOUNT_POINT);
-        if (strncmp(path, SD_MOUNT_POINT, mlen) == 0) {
+        size_t mlen = strlen(MUSIC_DIR);
+        if (strncmp(path, MUSIC_DIR, mlen) == 0) {
             disp = path + mlen;
             if (disp[0] == 0) disp = "/";
         }

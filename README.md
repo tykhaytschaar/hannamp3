@@ -28,7 +28,8 @@ bekötés: [PINOUT.md](PINOUT.md), hátralévő bekötések: [WIRING_TODO.md](WI
 - **Három képernyő** (swipe-pal vagy Menu gombbal váltható):
   - *Now Playing* — album art, cím, előadó · album, progress, transport
     gombok, görgethető album-tracklista (tap = lejátszás)
-  - *Library* — mappa-böngésző (almappák + MP3-ak, `..` sorral). Zenés
+  - *Library* — mappa-böngésző (almappák + MP3-ak, `..` sorral); a gyökere
+    a `/sdcard/music` — a kártya többi része (games, egyéb) nem látszik. Zenés
     mappákban a lista tetején **„Play all"** sor: az albumot az elsőtől
     indítja. Ha a mappában `.m3u`/`.m3u8` playlist van, az veszi át a
     „Play all" szerepét, és a lejátszási sorrendet a playlist adja —
@@ -57,15 +58,18 @@ klasszikusok (Space Invaders, Pong, Tetris, Brix, ...) tucatjával elérhetők,
 fájlonként pár KB.
 
 - **Indítás**: Settings → *Games* sor (választólista a `/sdcard/games`
-  tartalmából), vagy a Library-ben egy `.ch8` fájlra koppintva.
+  tartalmából).
 - **Kijelző**: felül fejléc-sáv (Exit gomb, játéknév, bíp-jelző), alatta a
   64×32-es játéktér 7×-es nagyítással (448×224). Hang helyett (1. fázis) a
   fejléc-jelző villan, amíg a ROM "bípel".
 - **Vezérlés**: Prev/Next = 4/6 (bal/jobb), Play = 5 (tűz/akció),
-  Vol± = 2/8 (fel/le) — a klasszikusok zömének ez a kiosztása. Kilépés: a
-  fejléc **Exit** gombja (fallback: Menu gomb).
-- **Zene**: játék alatt a lejátszás szünetel, kilépéskor folytatódik.
-  Játék közben a display-off és a deep sleep nem aktiválódik.
+  Vol± = 2/8 (fel/le) — a klasszikusok zömének ez a kiosztása. A gombokra
+  kötött CLI-parancsok (`next`/`prev`/`play`/`vol up`/`vol down`) játék
+  közben ugyanezeket a kulcsokat ütik (rövid tapként). Kilépés: a fejléc
+  **Exit** gombja (fallback: Menu gomb).
+- **Zene**: a játék indításakor a lejátszás leáll (stop — nincs automatikus
+  folytatás kilépéskor). Játék közben a display-off és a deep sleep nem
+  aktiválódik.
 - A ROM betöltés után RAM-ból fut (nincs SD-hozzáférés játék közben);
   a VM quirk-profilja CHIP-48/SCHIP (a 90-es évekbeli játékpakkok ezt várják).
 

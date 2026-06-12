@@ -78,6 +78,9 @@ static struct {
     bool            beep_shown;
     bool            halted_logged;
     game_exit_cb_t  on_exit;
+    // CLI-ből injektált kulcs-tapek: kulcsonként hátralévő "lenyomva" tickek
+    // (game_handle_button tölti, a poll_keys csorgatja le).
+    uint8_t         inject[CHIP8_KEYS];
 } G;
 
 // --- Game picker állapot ---
@@ -214,7 +217,24 @@ static void exit_btn_click(lv_event_t *e)
 static void poll_keys(void)
 {
     for (size_t i = 0; i < sizeof(KEYMAP) / sizeof(KEYMAP[0]); i++) {
-        chip8_set_key(KEYMAP[i].key, io_button_down(KEYMAP[i].evt));
+        int key = KEYMAP[i].key;
+        chip8_set_key(key, io_button_down(KEYMAP[i].evt) || G.inject[key] > 0);
+        if (G.inject[key]) G.inject[key]--;
+    }
+}
+
+// ~8 tick ≈ 128 ms szimulált lenyomás: az EX9E/EXA1 pollnak bőven elég, és
+// a lejártával az FX0A press-then-release feltétele is teljesül.
+#define INJECT_TICKS 8
+
+void game_handle_button(btn_event_t evt)
+{
+    if (!G.active) return;
+    for (size_t i = 0; i < sizeof(KEYMAP) / sizeof(KEYMAP[0]); i++) {
+        if (KEYMAP[i].evt == evt) {
+            G.inject[KEYMAP[i].key] = INJECT_TICKS;
+            return;
+        }
     }
 }
 
@@ -331,6 +351,7 @@ bool game_start(const char *rom_path, game_exit_cb_t on_exit)
     G.beep_shown    = false;
     G.halted_logged = false;
     G.on_exit       = on_exit;
+    memset(G.inject, 0, sizeof(G.inject));
     G.active        = true;
     G.timer = lv_timer_create(game_tick_cb, TICK_MS, NULL);
     lvgl_port_unlock();

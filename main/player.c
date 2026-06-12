@@ -149,12 +149,14 @@ static void browser_enter(void)
 
 static void browser_up(void)
 {
-    if (strcmp(s_bpath, SD_MOUNT_POINT) == 0) return;   // gyökérnél nem megyünk feljebb
+    // A böngésző gyökere a MUSIC_DIR — a kártya többi része (games, egyéb)
+    // nem tartozik a Library-re.
+    if (strcmp(s_bpath, MUSIC_DIR) == 0) return;
     char *slash = strrchr(s_bpath, '/');
     if (slash) {
         *slash = 0;
-        if (strlen(s_bpath) < strlen(SD_MOUNT_POINT)) {
-            strcpy(s_bpath, SD_MOUNT_POINT);
+        if (strlen(s_bpath) < strlen(MUSIC_DIR)) {
+            strcpy(s_bpath, MUSIC_DIR);
         }
     }
     s_bcursor = 0;
@@ -219,31 +221,16 @@ static bool list_is_single_folder(void)
 // hívja a lista határán, "Next album" módban.
 static bool advance_album(int dir, bool autoplay);
 
-// Game mode: szólt-e zene a játék indításakor — kilépéskor onnan folytatjuk.
-static bool s_game_resume = false;
-
-// A game mode lebontása után hívódik (LVGL task kontextus, lásd game.h).
-static void game_on_exit(void)
-{
-    if (s_game_resume) {
-        s_game_resume = false;
-        audio_resume();
-        ui_set_state(AUDIO_STATE_PLAYING);
-    }
-}
-
+// Játék indításakor a zene leáll (stop, nem pause — nincs automatikus
+// folytatás kilépéskor): a játék után a Play gomb a kiválasztott tracket
+// elölről indítja. Betöltési hibánál a lejátszáshoz nem nyúlunk.
 void player_launch_game(const char *path)
 {
     if (game_is_active()) return;
-    audio_status_t st;
-    audio_get_status(&st);
-    s_game_resume = (st.state == AUDIO_STATE_PLAYING);
-    if (s_game_resume) {
-        audio_pause();
-        ui_set_state(AUDIO_STATE_PAUSED);
-    }
-    if (!game_start(path, game_on_exit)) {
-        game_on_exit();   // betöltési hiba — a zene ne ragadjon szünetben
+    if (game_start(path, NULL)) {
+        audio_stop();
+        ui_set_state(AUDIO_STATE_STOPPED);
+        ui_set_progress(0, 0);
     }
 }
 
@@ -364,11 +351,14 @@ void player_handle_button(btn_event_t evt)
     // egy gombnyomás kell, hogy érvényesüljön.
     if (ui_user_activity()) return;
 
-    // Game mode: a játék-gombokat a game.c nyersen pollozza (tartás-állapot
-    // kell neki) — itt csak a Menu fallback-kilépést kezeljük, minden más
-    // eseményt eldobunk, hogy a player ne reagáljon a játék nyomkodására.
+    // Game mode: a fizikai gombokat a game.c nyersen pollozza (tartás-
+    // állapot kell neki) — itt a Menu fallback-kilépést kezeljük, minden
+    // más eseményt a játéknak adunk kulcs-tapként: így a CLI-ből érkező
+    // next/prev/vol/play parancsok is működnek játék közben. A player a
+    // játék nyomkodására nem reagál.
     if (game_is_active()) {
         if (evt == BTN_EVT_MENU) game_request_exit();
+        else                     game_handle_button(evt);
         return;
     }
 
@@ -671,11 +661,13 @@ void player_start(void)
     }
     ui_set_backlight((uint8_t)saved_bl);
 
-    // Böngésző: ha van mentett könyvtár és még létezik, oda térünk vissza,
-    // különben az SD gyökeréből indulunk.
-    strcpy(s_bpath, SD_MOUNT_POINT);
+    // Böngésző: ha van mentett könyvtár, még létezik ÉS a MUSIC_DIR alatt
+    // van (a gyökér-váltás előtti mentések kieshetnek), oda térünk vissza,
+    // különben a music mappából indulunk.
+    strcpy(s_bpath, MUSIC_DIR);
     char saved_dir[sizeof(s_bpath)];
-    if (persist_get_str("br_dir", saved_dir, sizeof(saved_dir)) && saved_dir[0]) {
+    if (persist_get_str("br_dir", saved_dir, sizeof(saved_dir)) &&
+        strncmp(saved_dir, MUSIC_DIR, strlen(MUSIC_DIR)) == 0) {
         DIR *d = opendir(saved_dir);
         if (d) { closedir(d); strcpy(s_bpath, saved_dir); }
     }
