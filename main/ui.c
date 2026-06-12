@@ -343,7 +343,19 @@ static void ui_touch_init(void)
         .disp   = s_disp,
         .handle = s_touch,
     };
-    lvgl_port_add_touch(&touch_lv_cfg);
+    lv_indev_t *indev = lvgl_port_add_touch(&touch_lv_cfg);
+
+    // Touch-érzékenység hangolása — EMPIRIKUS KNOB #4 és #5.
+    // A default 33 ms-os mintavétellel egy gyors pöccintés alig 3-4 pontot ad,
+    // így az LVGL tap-nek látja (alig mért elmozdulás) → téves click a list-
+    // soron (véletlen lejátszás-indítás scroll/swipe helyett).
+    //   #4: indev-olvasás 33 → 10 ms — a flick mozgása is látszik.
+    //   #5: scroll_limit 10 → 5 px — hamarabb vált scrollra, a mozgó ujj alatt
+    //       nem sül el click. (FT6336 jitter ~1-2 px, az álló tap biztonságos.)
+    if (indev) {
+        lv_timer_set_period(lv_indev_get_read_timer(indev), 10);
+        lv_indev_set_scroll_limit(indev, 5);
+    }
 
     for (int i = 0; i < UI_SCREEN_COUNT; i++) {
         lv_obj_add_event_cb(U.scr[i], touch_log_event_cb, LV_EVENT_PRESSED, NULL);
