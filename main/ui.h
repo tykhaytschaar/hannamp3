@@ -112,6 +112,11 @@ void ui_browser_set_cursor(int cursor);
 bool ui_user_activity(void);
 void ui_idle_check(void);
 
+// Game mode: az idle/display-off számláló tiltása játék alatt — a játékos
+// nem feltétlenül generál gomb/touch eseményt elég sűrűn, mégsem alhat el a
+// kijelző. Feloldáskor az idle-számláló nulláról indul. (game.c hívja.)
+void ui_set_idle_inhibit(bool inhibit);
+
 // Wake-pending állapot kikényszerítése: a következő ui_user_activity() hívás
 // úgy fog viselkedni, mintha aludt volna a kijelző (visszaadja true, és így
 // a player.c eldobja az adott gombnyomás funkcióját). main.c hívja deep

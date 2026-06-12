@@ -39,7 +39,8 @@ bekötés: [PINOUT.md](PINOUT.md), hátralévő bekötések: [WIRING_TODO.md](WI
     testvérmappái közt lép abc-sorrendben, körbefordulva; az egy mappából
     építkező m3u albumként viselkedik, az albumokon átívelő m3u végén stop).
     Next album módban a kézi Next/Prev is albumhatáron lép át a lista szélén
-    (több-mappás m3u-nál ott no-op). USB Storage gomb
+    (több-mappás m3u-nál ott no-op). Games és USB Storage gomb
+- **CHIP-8 játékok** SD-kártyáról (lásd lent)
 - **Perzisztens beállítások** (NVS): hangerő, fényerő, display-off timeout,
   sleep engedély
 - **Energiagazdálkodás**: display-off tétlenség után (10/15/30 s / never,
@@ -47,6 +48,26 @@ bekötés: [PINOUT.md](PINOUT.md), hátralévő bekötések: [WIRING_TODO.md](WI
   500 ms-os nyomva tartásával
 - **Boot splash**: flash-be ágyazott JPEG frame-animáció
   (`assets/boot/frame_*.jpg`, `esp_new_jpeg` dekód, max ~30 fps)
+
+## CHIP-8 játékok (Games)
+
+Beépített CHIP-8 emulátor (`chip8.c` — tiszta C VM, `game.c` — game mode UI):
+a `.ch8` ROM-ok a kártya **`/sdcard/games`** mappájából futnak, public domain
+klasszikusok (Space Invaders, Pong, Tetris, Brix, ...) tucatjával elérhetők,
+fájlonként pár KB.
+
+- **Indítás**: Settings → *Games* sor (választólista a `/sdcard/games`
+  tartalmából), vagy a Library-ben egy `.ch8` fájlra koppintva.
+- **Kijelző**: felül fejléc-sáv (Exit gomb, játéknév, bíp-jelző), alatta a
+  64×32-es játéktér 7×-es nagyítással (448×224). Hang helyett (1. fázis) a
+  fejléc-jelző villan, amíg a ROM "bípel".
+- **Vezérlés**: Prev/Next = 4/6 (bal/jobb), Play = 5 (tűz/akció),
+  Vol± = 2/8 (fel/le) — a klasszikusok zömének ez a kiosztása. Kilépés: a
+  fejléc **Exit** gombja (fallback: Menu gomb).
+- **Zene**: játék alatt a lejátszás szünetel, kilépéskor folytatódik.
+  Játék közben a display-off és a deep sleep nem aktiválódik.
+- A ROM betöltés után RAM-ból fut (nincs SD-hozzáférés játék közben);
+  a VM quirk-profilja CHIP-48/SCHIP (a 90-es évekbeli játékpakkok ezt várják).
 
 ## USB MSC mód (USB Storage)
 

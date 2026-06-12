@@ -14,6 +14,7 @@
 #include "ui.h"
 #include "io.h"
 #include "player.h"
+#include "game.h"
 #include "esp_timer.h"
 #include "esp_sleep.h"
 #include "driver/gpio.h"
@@ -218,6 +219,34 @@ static bool list_is_single_folder(void)
 // hívja a lista határán, "Next album" módban.
 static bool advance_album(int dir, bool autoplay);
 
+// Game mode: szólt-e zene a játék indításakor — kilépéskor onnan folytatjuk.
+static bool s_game_resume = false;
+
+// A game mode lebontása után hívódik (LVGL task kontextus, lásd game.h).
+static void game_on_exit(void)
+{
+    if (s_game_resume) {
+        s_game_resume = false;
+        audio_resume();
+        ui_set_state(AUDIO_STATE_PLAYING);
+    }
+}
+
+void player_launch_game(const char *path)
+{
+    if (game_is_active()) return;
+    audio_status_t st;
+    audio_get_status(&st);
+    s_game_resume = (st.state == AUDIO_STATE_PLAYING);
+    if (s_game_resume) {
+        audio_pause();
+        ui_set_state(AUDIO_STATE_PAUSED);
+    }
+    if (!game_start(path, game_on_exit)) {
+        game_on_exit();   // betöltési hiba — a zene ne ragadjon szünetben
+    }
+}
+
 // Play a böngészőben: mappán állva belép; m3u-n a playlist lesz a lejátszási
 // lista (a lista sorrendjében); fájlon a mappa MP3-jai, a kiválasztottól indítva.
 static void browser_activate(void)
@@ -231,6 +260,13 @@ static void browser_activate(void)
 
     char target[512];
     snprintf(target, sizeof(target), "%.383s/%.127s", s_bpath, ent->name);
+
+    if (ent->is_ch8) {
+        // CHIP-8 ROM: game mode — a lejátszási listához nem nyúlunk, a zene
+        // szüneteltetését/folytatását a player_launch_game intézi.
+        player_launch_game(target);
+        return;
+    }
 
     if (ent->is_m3u) {
         // Playlist: a lejátszási lista az m3u sorrendje — a prev/next és az
@@ -327,6 +363,14 @@ void player_handle_button(btn_event_t evt)
     // funkciót (play/next/menu/stb.) nem hajtjuk végre. A felhasználónak még
     // egy gombnyomás kell, hogy érvényesüljön.
     if (ui_user_activity()) return;
+
+    // Game mode: a játék-gombokat a game.c nyersen pollozza (tartás-állapot
+    // kell neki) — itt csak a Menu fallback-kilépést kezeljük, minden más
+    // eseményt eldobunk, hogy a player ne reagáljon a játék nyomkodására.
+    if (game_is_active()) {
+        if (evt == BTN_EVT_MENU) game_request_exit();
+        return;
+    }
 
     audio_status_t st;
     audio_get_status(&st);
@@ -551,7 +595,8 @@ static void player_task(void *arg)
 
         // Sleep döntés: ha enabled, és nincs lejátszás SLEEP_IDLE_MS óta.
         // Playing alatt a timer folyamatosan resettelődik (sose alszik el).
-        if (st.state == AUDIO_STATE_PLAYING) {
+        // A futó játék is aktivitás — játék közben nem mehetünk deep sleep-be.
+        if (st.state == AUDIO_STATE_PLAYING || game_is_active()) {
             not_playing_since_us = esp_timer_get_time();
         } else if (ui_get_sleep_enabled()) {
             int64_t idle_ms = (esp_timer_get_time() - not_playing_since_us) / 1000;

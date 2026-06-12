@@ -162,6 +162,28 @@ static void lock_task(void *arg)
 
 bool io_is_locked(void) { return s_locked; }
 
+// Nyers gombállapot a game mode polling-jához. A gombok GND-re zárnak
+// (belső pull-up, lásd setup_button active_level=0) → LOW = lenyomva.
+static int evt_to_gpio(btn_event_t evt)
+{
+    switch (evt) {
+    case BTN_EVT_PLAY_PAUSE: return PIN_BTN_PLAY;
+    case BTN_EVT_NEXT:       return PIN_BTN_NEXT;
+    case BTN_EVT_PREV:       return PIN_BTN_PREV;
+    case BTN_EVT_MENU:
+    case BTN_EVT_MENU_LONG:  return PIN_BTN_MENU;
+    case BTN_EVT_VOL_UP:     return PIN_BTN_VOL_UP;
+    case BTN_EVT_VOL_DOWN:   return PIN_BTN_VOL_DOWN;
+    }
+    return -1;
+}
+
+bool io_button_down(btn_event_t evt)
+{
+    int pin = evt_to_gpio(evt);
+    return pin >= 0 && gpio_get_level(pin) == 0;
+}
+
 void io_init(void)
 {
     setup_button(PIN_BTN_PLAY,     BTN_EVT_PLAY_PAUSE, false);

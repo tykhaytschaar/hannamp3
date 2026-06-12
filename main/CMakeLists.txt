@@ -16,6 +16,8 @@ idf_component_register(
         "boot_splash.c"
         "cover_art.c"
         "usb_msc.c"
+        "chip8.c"
+        "game.c"
         "fonts/mp3_inter_12.c"
         "fonts/mp3_inter_14.c"
         "fonts/mp3_inter_18.c"

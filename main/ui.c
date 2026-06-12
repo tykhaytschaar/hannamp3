@@ -26,6 +26,7 @@
 #include "boot_splash.h"
 #include "usb_msc.h"  // usb_msc_request_reboot (Settings → USB Storage gomb)
 #include "cover_art.h"
+#include "game.h"     // game_show_picker (Settings → Games gomb)
 
 static const char *TAG = "ui";
 
@@ -780,6 +781,14 @@ static void usb_storage_row_click(lv_event_t *e)
     usb_msc_request_reboot();   // sosem tér vissza
 }
 
+// Games gomb tap → CHIP-8 game picker (game.c). Alvó kijelzőn csak ébreszt.
+static void games_row_click(lv_event_t *e)
+{
+    (void)e;
+    if (ui_user_activity()) return;
+    game_show_picker();
+}
+
 static lv_obj_t *settings_row(lv_obj_t *parent, const char *icon, const char *label,
                               lv_obj_t **out_value)
 {
@@ -840,6 +849,22 @@ static void build_settings(void)
     // a highlight megszűnt, az indent marad.)
     for (int i = 0; i < UI_SETTING_COUNT; i++) {
         if (U.set_row[i]) lv_obj_set_style_pad_left(U.set_row[i], 12, LV_PART_MAIN);
+    }
+
+    // Games — gomb (akció): a /sdcard/games CHIP-8 ROM-jainak választólistája
+    // (game.c picker). Stílusban az USB Storage gomb párja.
+    {
+        lv_obj_t *btn = lv_button_create(panel);
+        lv_obj_set_size(btn, lv_pct(100), 36);
+        lv_obj_set_style_bg_color(btn, COL_BG_PANEL_2, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(btn, 8, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(btn, 0, LV_PART_MAIN);
+        lv_obj_add_event_cb(btn, games_row_click, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_obj_set_style_text_color(lbl, COL_ACCENT, 0);
+        lv_label_set_text(lbl, "Games");
+        lv_obj_center(lbl);
     }
 
     // USB Storage — gomb (akció, nem beállítás): koppintásra újraindul USB MSC
@@ -948,8 +973,8 @@ static void browser_rebuild_list(void)
     bool any_file  = false;
     for (int i = 0; i < U.br_count; i++) {
         if (U.br_entries[i].is_dir) continue;
-        if (U.br_entries[i].is_m3u) m3u_count++;
-        else                        any_file = true;
+        if      (U.br_entries[i].is_m3u)  m3u_count++;
+        else if (!U.br_entries[i].is_ch8) any_file = true;   // a ch8 nem zene
     }
 
     // Parent ".." sor, ha nem gyökérben vagyunk (UI-only, user_data = -1).
@@ -979,9 +1004,10 @@ static void browser_rebuild_list(void)
         return;
     }
     for (int i = 0; i < U.br_count; i++) {
-        // Mappa = folder ikon, m3u = play ikon, fájl = audio ikon.
+        // Mappa = folder ikon, m3u/ch8 = play ikon, zenefájl = audio ikon.
         const char *icon = U.br_entries[i].is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_AUDIO;
         const char *text = U.br_entries[i].name;
+        if (U.br_entries[i].is_ch8) icon = LV_SYMBOL_PLAY;
         if (U.br_entries[i].is_m3u) {
             icon = LV_SYMBOL_PLAY;
             // Egyetlen playlist → beszédes "Play all" felirat; többnél a
@@ -1475,6 +1501,16 @@ bool ui_user_activity(void)
     return false;
 }
 
+// Game mode alatt az idle-számláló nem jár (lásd ui.h). Feloldáskor nulláról
+// indul, hogy a kijelző ne kapcsoljon le azonnal a játékból kilépve.
+static bool s_idle_inhibit = false;
+
+void ui_set_idle_inhibit(bool inhibit)
+{
+    s_idle_inhibit = inhibit;
+    if (!inhibit) s_last_activity_us = esp_timer_get_time();
+}
+
 void ui_force_wake_pending(void)
 {
     // Csak a flag-et állítjuk; a kijelző fizikailag már bekapcsolt az
@@ -1486,6 +1522,7 @@ void ui_force_wake_pending(void)
 
 void ui_idle_check(void)
 {
+    if (s_idle_inhibit) return;
     if (s_disp_off || !s_panel) return;
     if (s_idle_timeout_s <= 0) return;        // never
     // A gomb/CLI aktivitás (s_last_activity_us) ÉS a touch közül a frissebb

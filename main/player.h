@@ -47,3 +47,7 @@ void player_browser_up(void);
 // Library "Play all" sor (m3u nélküli mappák): a böngészett mappa fájljainak
 // betöltése név-sorrendben + play az elsőtől + Now Playing. Alvón csak ébreszt.
 void player_browser_play_all(void);
+
+// CHIP-8 játék indítása (a Settings → Games picker és a Library .ch8 sora
+// hívja). Ha szól zene, szünetelteti; a játékból kilépve folytatja.
+void player_launch_game(const char *path);

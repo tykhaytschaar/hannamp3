@@ -35,3 +35,8 @@ uint8_t  io_battery_percent_from_mv(uint16_t mv);
 // LOCK tolókapcsoló aktuális állapota — true ha LOW (GND-re zárva).
 // Frissítve egy 100 ms-os polling-task által, lock_cb-vel értesítéssel.
 bool io_is_locked(void);
+
+// Pillanatnyi nyers gombállapot — true, ha a gomb épp lenyomva. A game mode
+// pollozza frame-enként: az eseményalapú callback csak press-t ad, a CHIP-8-
+// nak viszont tartás-állapot kell (EX9E/EXA1).
+bool io_button_down(btn_event_t evt);
