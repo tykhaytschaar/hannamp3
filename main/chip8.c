@@ -22,7 +22,8 @@ typedef struct {
     uint8_t  dt, st;                  // delay / sound timer
     uint8_t  fb[CHIP8_W * CHIP8_H];   // 1 byte / pixel (0/1)
     bool     keys[CHIP8_KEYS];
-    bool     dirty;
+    chip8_rect_t rects[CHIP8_DIRTY_RECTS_MAX];   // felgyűlt dirty-rectek
+    uint8_t  n_rects;
     bool     halted;
     int8_t   wait_key;     // FX0A: lenyomva észlelt kulcs, a felengedésére várunk (-1: nincs)
     uint32_t rng;
@@ -37,6 +38,9 @@ static chip8_t *C = NULL;
 size_t chip8_state_bytes(void) { return sizeof(chip8_t); }
 
 void chip8_attach(void *state_mem) { C = (chip8_t *)state_mem; }
+
+static void mark_full_dirty(void);
+static void mark_dirty(int x0, int y0, int x1, int y1);
 
 // A beépített 0–F hex számjegy-sprite-ok (4×5 px), a FX29 ezekre mutat.
 static const uint8_t FONT[80] = {
@@ -68,7 +72,54 @@ void chip8_reset(const chip8_quirks_t *q)
     C->rng      = 0x2EE6D6u;            // determinisztikus default; chip8_seed felülírja
     if (q) C->q = *q;
     else   C->q = (chip8_quirks_t){ .shift_vx = true, .ldstr_keep_i = true };
-    C->dirty = true;                    // az üres képernyő is kirajzolandó
+    mark_full_dirty();                  // az üres képernyő is kirajzolandó
+}
+
+// A teljes képernyő egyetlen rectként (CLS / reset).
+static void mark_full_dirty(void)
+{
+    C->rects[0] = (chip8_rect_t){ 0, 0, CHIP8_W - 1, CHIP8_H - 1 };
+    C->n_rects  = 1;
+}
+
+// Új dirty-téglalap felvétele. Átfedő/érintkező (±1 px) meglévőbe olvad —
+// a sprite "töröl a régi helyen + rajzol mellé" párja így egy rect lesz.
+// Tele listánál a legkisebb terület-növekedést okozó rectbe olvasztunk.
+static void mark_dirty(int x0, int y0, int x1, int y1)
+{
+    for (int i = 0; i < C->n_rects; i++) {
+        chip8_rect_t *r = &C->rects[i];
+        if (x0 <= r->x1 + 1 && x1 + 1 >= r->x0 &&
+            y0 <= r->y1 + 1 && y1 + 1 >= r->y0) {
+            if (x0 < r->x0) r->x0 = (uint8_t)x0;
+            if (y0 < r->y0) r->y0 = (uint8_t)y0;
+            if (x1 > r->x1) r->x1 = (uint8_t)x1;
+            if (y1 > r->y1) r->y1 = (uint8_t)y1;
+            return;
+        }
+    }
+    if (C->n_rects < CHIP8_DIRTY_RECTS_MAX) {
+        C->rects[C->n_rects++] =
+            (chip8_rect_t){ (uint8_t)x0, (uint8_t)y0, (uint8_t)x1, (uint8_t)y1 };
+        return;
+    }
+    int best = 0;
+    int best_grow = 0x7FFFFFFF;
+    for (int i = 0; i < C->n_rects; i++) {
+        const chip8_rect_t *r = &C->rects[i];
+        int ux0 = x0 < r->x0 ? x0 : r->x0;
+        int uy0 = y0 < r->y0 ? y0 : r->y0;
+        int ux1 = x1 > r->x1 ? x1 : r->x1;
+        int uy1 = y1 > r->y1 ? y1 : r->y1;
+        int grow = (ux1 - ux0 + 1) * (uy1 - uy0 + 1)
+                 - (r->x1 - r->x0 + 1) * (r->y1 - r->y0 + 1);
+        if (grow < best_grow) { best_grow = grow; best = i; }
+    }
+    chip8_rect_t *r = &C->rects[best];
+    if (x0 < r->x0) r->x0 = (uint8_t)x0;
+    if (y0 < r->y0) r->y0 = (uint8_t)y0;
+    if (x1 > r->x1) r->x1 = (uint8_t)x1;
+    if (y1 > r->y1) r->y1 = (uint8_t)y1;
 }
 
 bool chip8_load(const uint8_t *rom, size_t size)
@@ -109,12 +160,13 @@ bool chip8_beeping(void)       { return C && C->st > 0; }
 bool chip8_halted(void)        { return C && C->halted; }
 const uint8_t *chip8_fb(void)  { return C ? C->fb : NULL; }
 
-bool chip8_take_dirty(void)
+int chip8_take_dirty_rects(chip8_rect_t *out, int max)
 {
-    if (!C) return false;
-    bool d = C->dirty;
-    C->dirty = false;
-    return d;
+    if (!C || !out) return 0;
+    int n = C->n_rects < max ? C->n_rects : max;
+    for (int i = 0; i < n; i++) out[i] = C->rects[i];
+    C->n_rects = 0;
+    return n;
 }
 
 // DXYN: 8 px széles, n px magas sprite XOR-rajzolása az I-ről. A kezdő-
@@ -123,6 +175,9 @@ static void draw_sprite(int vx, int vy, int n)
 {
     int xs = vx % CHIP8_W;
     int ys = vy % CHIP8_H;
+    // A ténylegesen átbillentett pixelek befoglalója (XOR 1-gyel mindig
+    // változtat, tehát minden kirajzolt set-bit dirty).
+    int mx0 = CHIP8_W, my0 = CHIP8_H, mx1 = -1, my1 = -1;
     C->v[0xF] = 0;
     for (int row = 0; row < n; row++) {
         int py = ys + row;
@@ -135,9 +190,13 @@ static void draw_sprite(int vx, int vy, int n)
             uint8_t *p = &C->fb[py * CHIP8_W + px];
             if (*p) C->v[0xF] = 1;
             *p ^= 1;
+            if (px < mx0) mx0 = px;
+            if (px > mx1) mx1 = px;
+            if (py < my0) my0 = py;
+            if (py > my1) my1 = py;
         }
     }
-    C->dirty = true;
+    if (mx1 >= 0) mark_dirty(mx0, my0, mx1, my1);
 }
 
 // Egy utasítás végrehajtása. false = HALT (a hívó loop kilép).
@@ -155,7 +214,7 @@ static bool step(void)
     case 0x0:
         if (op == 0x00E0) {                         // CLS
             memset(C->fb, 0, sizeof(C->fb));
-            C->dirty = true;
+            mark_full_dirty();
         } else if (op == 0x00EE) {                  // RET
             if (C->sp == 0) { C->halted = true; return false; }
             C->pc = C->stack[--C->sp];
@@ -282,13 +341,40 @@ static bool step(void)
     return true;
 }
 
-int chip8_run(int n)
+// Frame-vágási heurisztika: a frame ott ér véget, ahol egy rajzolási szakasz
+// lezárult — volt már DXYN, és utána FRAME_CUT_GAP-nél több nem-rajzoló
+// utasítás futott (a játékciklus "logika" fázisa). Így egy sok-sprite-os
+// újrarajzolás (sűrűn követő DXYN-ek, pl. az Invaders teljes rácsmenete:
+// draw-ok közt ~14 utasítás) EGY frame-en belül marad, miközben a ritkásabb
+// rajzolású játékciklus (pl. a lövedék "töröl+rajzol" párja után ~17+
+// utasítás logika) frame-enként egy iterációt halad — a megjelenítés sima,
+// a játéktempó nem skálázódik a büdzsével. Empirikus küszöb: az Invaders
+// rács-menete 8-14-es, a lövedék-iterációja 17-es gappel rajzol; a vágásnak
+// a kettő közé kell esnie (a since_draw a köztes utasítások száma, ami a
+// gap-1 maximumot éri el a következő draw előtt).
+#define FRAME_CUT_GAP  15
+
+int chip8_run_frame(int budget, int max_budget)
 {
     if (!C) return 0;
-    int done = 0;
-    while (done < n && !C->halted) {
+    int executed   = 0;
+    int since_draw = 0;
+    bool drew      = false;
+    while (!C->halted) {
+        if (drew && since_draw > FRAME_CUT_GAP) break;   // rajzolási szakasz vége
+        if (!drew && executed >= budget) break;          // rajzolás nélküli frame
+        if (executed >= max_budget) break;               // védőkorlát
+        uint16_t op = (uint16_t)(C->ram[C->pc & 0xFFF] << 8)
+                    | C->ram[(C->pc + 1) & 0xFFF];
+        bool is_draw = (op >> 12) == 0xD;
         if (!step()) break;
-        done++;
+        executed++;
+        if (is_draw) {
+            drew = true;
+            since_draw = 0;
+        } else {
+            since_draw++;
+        }
     }
-    return done;
+    return executed;
 }

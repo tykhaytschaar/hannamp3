@@ -47,10 +47,16 @@ bool chip8_load(const uint8_t *rom, size_t size);
 // a hívó adjon valódi entrópiát (pl. esp_timer_get_time()).
 void chip8_seed(uint32_t seed);
 
-// n utasítás végrehajtása. Ismeretlen opcode / stack-hiba esetén a VM
-// HALT-ba megy (chip8_halted) és a hátralévő utasítások kimaradnak.
+// Egy 60 Hz-es frame utasítás-büdzséjének végrehajtása, rajzolás-burst-
+// hosszabbítással: az alap-büdzsé (budget) kimerülése után CSAK akkor fut
+// tovább (max_budget-ig), ha épp sorozatos DXYN-ek közepén tart a program
+// (>= 4 draw, köztük legfeljebb ~24 utasítás). A sok-sprite-os újrarajzolás
+// (pl. az Invaders teljes rácsa) így egy frame-en belül befejeződik, a
+// normál játéklogika (lövedék, mozgás) tempóját viszont az alap-büdzsé
+// adja — a kettő nem egy globális sebesség-gombon lóg.
+// Ismeretlen opcode / stack-hiba esetén a VM HALT-ba megy (chip8_halted).
 // Visszaadja a ténylegesen végrehajtott utasítások számát.
-int chip8_run(int n);
+int chip8_run_frame(int budget, int max_budget);
 
 // Delay + sound timer léptetése — 60 Hz-enként hívandó.
 void chip8_tick_60hz(void);
@@ -67,5 +73,14 @@ bool chip8_halted(void);
 // A 64×32-es framebuffer — 1 byte / pixel, 0 vagy 1, sorfolytonos.
 const uint8_t *chip8_fb(void);
 
-// true, ha a framebuffer változott az előző hívás óta (a flaget törli).
-bool chip8_take_dirty(void);
+// Változás-követés: KÜLÖN téglalapok, nem egyetlen befoglaló — egy távoli
+// kis változás (pl. lövedék) és egy nagy blokk (pl. invader-rács) uniója
+// majdnem a teljes képernyő lenne, külön rectként viszont csak a tényleges
+// változást kell újrarajzolni. Az átfedő/érintkező rectek összeolvadnak;
+// ha elfogy a hely, a legkisebb növekedésű meglévőbe olvasztunk.
+typedef struct { uint8_t x0, y0, x1, y1; } chip8_rect_t;   // zárt intervallumok
+#define CHIP8_DIRTY_RECTS_MAX 8
+
+// A felgyűlt dirty-recteket out-ba másolja (max db), és üríti a listát.
+// Visszaadja a darabszámot (0 = nem változott semmi).
+int chip8_take_dirty_rects(chip8_rect_t *out, int max);

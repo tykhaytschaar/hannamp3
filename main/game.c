@@ -2,6 +2,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "sdkconfig.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
@@ -47,11 +48,26 @@ static const char *TAG = "game";
 #define PX_FG  0x2F3A   // COL_ACCENT (0x2EE6D6)
 #define PX_BG  0x0882   // COL_BG (0x0E1116)
 
-// Játék-loop: 16 ms-os lv_timer (~62 tick/s). Tickenként INSTR_PER_TICK
-// utasítás — a ROM-ok nem definiálnak órajelet, ~750 ips a klasszikusok
-// kényelmes tempója. (Játékonkénti hangolás: 2. fázis.)
+// Játék-loop: 16 ms-os lv_timer, de a 60 Hz-es időalap az eltelt VALÓS időből
+// jön (catch-up): ha egy redraw miatt a timer csúszik, a következő lefutás
+// több 16,67 ms-os adagot pótol — a játéksebesség így a render ingadozásától
+// független, csak a megjelenítési frame-ráta döccen.
+//
+// Az adagonkénti utasítás-büdzsé (G.ips) futásidőben hangolható (CLI `gips`):
+// a ROM-ok nem definiálnak órajelet, és a "jó" érték játékfüggő. Alacsony
+// büdzsével a sok-sprite-os rajzolás-burstök (pl. az Invaders teljes rácsa)
+// több frame-en át húzódnak — a ROM logikája (lövedék!) addig áll.
 #define TICK_MS         16
-#define INSTR_PER_TICK  12
+#define FRAME_US        16667   // egy 60 Hz-es adag valós ideje
+#define MAX_CATCHUP     4       // extrém csúszás után ennyi adagnál többet nem pótlunk
+#define GAME_IPS_DEFAULT 20
+#define GAME_IPS_MIN     5
+#define GAME_IPS_MAX     200
+
+// Game mode alatt az LVGL display-refresh 16 ms (60 fps) — a default
+// CONFIG_LV_DEF_REFR_PERIOD (33 ms) 30 fps-re plafonozná a mozgást,
+// hiába invalidálunk 60 Hz-en. Kilépéskor visszaáll.
+#define GAME_REFR_PERIOD_MS  16
 
 // Fizikai gomb → CHIP-8 kulcs. A klasszikusok zöme a 4/6 (bal/jobb) + 5
 // (tűz/akció) hármast használja; a 2/8 a fel/le. A gombokat nyersen pollozzuk
@@ -84,6 +100,8 @@ static struct {
     // A CHIP-8 VM munkaterülete (PSRAM, lásd chip8_attach) — első indításkor
     // allokáljuk, utána megtartjuk (~6 KB, nem éri meg ciklikusan szabadítani).
     void           *vm;
+    int64_t         last_us;       // a 60 Hz-es időalap órája (catch-up)
+    int             ips;           // utasítás / 60 Hz-es adag (CLI `gips`)
 } G;
 
 // --- Game picker állapot ---
@@ -98,22 +116,24 @@ static struct {
 // Megjelenítés
 // -----------------------------------------------------------------------------
 
-// A 64×32-es 0/1 framebuffer expandálása a 448×224-es RGB565 bufferbe.
-// Pixelenként GAME_SCALE széles futam, majd a kész sor (GAME_SCALE-1)-szeri
-// másolása — a PSRAM-írás így zömmel memcpy.
-static void render_fb(void)
+// A 64×32-es 0/1 framebuffer adott (zárt) téglalapjának expandálása a
+// 448×224-es RGB565 bufferbe. Pixelenként GAME_SCALE széles futam, majd a
+// kész sáv (GAME_SCALE-1)-szeri másolása — a PSRAM-írás így zömmel memcpy.
+static void render_fb_rect(int cx0, int cy0, int cx1, int cy1)
 {
     const uint8_t *fb = chip8_fb();
     uint16_t *dst = (uint16_t *)G.fbuf;
-    for (int y = 0; y < CHIP8_H; y++) {
+    size_t off = (size_t)cx0 * GAME_SCALE;
+    size_t len = (size_t)(cx1 - cx0 + 1) * GAME_SCALE * sizeof(uint16_t);
+    for (int y = cy0; y <= cy1; y++) {
         uint16_t *row0 = dst + (size_t)y * GAME_SCALE * GAME_W;
-        for (int x = 0; x < CHIP8_W; x++) {
+        for (int x = cx0; x <= cx1; x++) {
             uint16_t c = fb[y * CHIP8_W + x] ? PX_FG : PX_BG;
             uint16_t *p = row0 + x * GAME_SCALE;
             for (int i = 0; i < GAME_SCALE; i++) p[i] = c;
         }
         for (int i = 1; i < GAME_SCALE; i++) {
-            memcpy(row0 + (size_t)i * GAME_W, row0, GAME_W * sizeof(uint16_t));
+            memcpy(row0 + (size_t)i * GAME_W + off, row0 + off, len);
         }
     }
 }
@@ -188,6 +208,8 @@ static void do_exit(void)
     lvgl_port_lock(0);
     lv_timer_delete(G.timer);
     G.timer = NULL;
+    lv_timer_set_period(lv_display_get_refr_timer(lv_display_get_default()),
+                        CONFIG_LV_DEF_REFR_PERIOD);
     lv_obj_remove_flag(lv_layer_top(), LV_OBJ_FLAG_HIDDEN);
     ui_show_screen(ui_current_screen());   // U.current a játék alatt nem változott
     lv_image_cache_drop(&G.dsc);
@@ -249,14 +271,52 @@ static void game_tick_cb(lv_timer_t *t)
         return;
     }
 
-    poll_keys();
-    chip8_run(INSTR_PER_TICK);
-    chip8_tick_60hz();
+    // Catch-up: annyi 60 Hz-es adagot hajtunk végre, amennyi valós idő eltelt.
+    // A tört maradék megmarad (last_us adagonként lép); a korlát feletti
+    // adósságot eldobjuk, hogy egy extrém stall után ne pörögjön be a játék.
+    int64_t now = esp_timer_get_time();
+    int steps = (int)((now - G.last_us) / FRAME_US);
+    if (steps <= 0) return;
+    if (steps > MAX_CATCHUP) {
+        steps = MAX_CATCHUP;
+        G.last_us = now;
+    } else {
+        G.last_us += (int64_t)steps * FRAME_US;
+    }
 
-    if (chip8_take_dirty()) {
-        render_fb();
+    // A burst-plafon az alap-büdzsé többszöröse, de legalább akkora, hogy egy
+    // teljes rács-újrarajzolás (néhány száz utasítás) egy frame-be beférjen.
+    int maxb = G.ips * 10;
+    if (maxb < 600)  maxb = 600;
+    if (maxb > 2000) maxb = 2000;
+
+    for (int s = 0; s < steps; s++) {
+        poll_keys();
+        chip8_run_frame(G.ips, maxb);
+        chip8_tick_60hz();
+    }
+
+    // Csak a változott területeket expandáljuk és invalidáljuk — KÜLÖN
+    // rectekként: egy távoli kis változás (lövedék) és egy nagy blokk
+    // (invader-rács) együtt sem uniózódik teljes képernyővé, a flush a
+    // ténylegesen változott pixelekkel arányos.
+    chip8_rect_t rects[CHIP8_DIRTY_RECTS_MAX];
+    int nr = chip8_take_dirty_rects(rects, CHIP8_DIRTY_RECTS_MAX);
+    if (nr > 0) {
         lv_image_cache_drop(&G.dsc);
-        lv_obj_invalidate(G.img);
+        lv_area_t coords;
+        lv_obj_get_coords(G.img, &coords);
+        for (int i = 0; i < nr; i++) {
+            const chip8_rect_t *r = &rects[i];
+            render_fb_rect(r->x0, r->y0, r->x1, r->y1);
+            lv_area_t a = {
+                .x1 = coords.x1 + r->x0 * GAME_SCALE,
+                .y1 = coords.y1 + r->y0 * GAME_SCALE,
+                .x2 = coords.x1 + (r->x1 + 1) * GAME_SCALE - 1,
+                .y2 = coords.y1 + (r->y1 + 1) * GAME_SCALE - 1,
+            };
+            lv_obj_invalidate_area(G.img, &a);
+        }
     }
 
     // Bíp: hang helyett (1. fázis) a fejléc-jelző villan accent színre.
@@ -357,7 +417,7 @@ bool game_start(const char *rom_path, game_exit_cb_t on_exit)
     lv_obj_set_style_border_color(G.img, COL_BG_PANEL_2, LV_PART_MAIN);
     lv_obj_set_style_border_width(G.img, 1, LV_PART_MAIN);
 
-    render_fb();   // üres (csupa háttér) első frame
+    render_fb_rect(0, 0, CHIP8_W - 1, CHIP8_H - 1);   // üres első frame
     lv_screen_load(G.scr);
 
     G.exit_req      = false;
@@ -365,8 +425,12 @@ bool game_start(const char *rom_path, game_exit_cb_t on_exit)
     G.halted_logged = false;
     G.on_exit       = on_exit;
     memset(G.inject, 0, sizeof(G.inject));
+    G.last_us       = esp_timer_get_time();
+    if (G.ips == 0) G.ips = GAME_IPS_DEFAULT;   // a CLI-vel állított érték megmarad
     G.active        = true;
     G.timer = lv_timer_create(game_tick_cb, TICK_MS, NULL);
+    lv_timer_set_period(lv_display_get_refr_timer(lv_display_get_default()),
+                        GAME_REFR_PERIOD_MS);
     lvgl_port_unlock();
 
     ui_set_idle_inhibit(true);   // játék alatt nincs display-off
@@ -377,6 +441,14 @@ bool game_start(const char *rom_path, game_exit_cb_t on_exit)
 bool game_is_active(void)
 {
     return G.active;
+}
+
+void game_set_ips(int ips)
+{
+    if (ips < GAME_IPS_MIN) ips = GAME_IPS_MIN;
+    if (ips > GAME_IPS_MAX) ips = GAME_IPS_MAX;
+    G.ips = ips;
+    ESP_LOGI(TAG, "ips = %d (%d utasítás/s)", ips, ips * 60);
 }
 
 void game_request_exit(void)

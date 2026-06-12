@@ -13,6 +13,7 @@
 #include "usb_msc.h"
 #include "io.h"
 #include "ui.h"
+#include "game.h"
 
 static const char *TAG = "cli";
 
@@ -44,6 +45,24 @@ static void cli_dispatch(const char *cmd, const char *param)
     if (ui_user_activity()) {
         ESP_LOGI(TAG, "wake from CLI '%s' — command not executed", cmd);
         return;
+    }
+
+    // Game mode: a gombokra kötött parancsok a játék kulcsait ütik
+    // (rövid szimulált tap) — a player ilyenkor nem kap eseményt.
+    if (game_is_active()) {
+        btn_event_t gevt;
+        bool mapped = true;
+        if      (strcmp(cmd, "play") == 0) gevt = BTN_EVT_PLAY_PAUSE;
+        else if (strcmp(cmd, "next") == 0) gevt = BTN_EVT_NEXT;
+        else if (strcmp(cmd, "prev") == 0) gevt = BTN_EVT_PREV;
+        else if (strcmp(cmd, "vol") == 0 && strcmp(param, "up") == 0)   gevt = BTN_EVT_VOL_UP;
+        else if (strcmp(cmd, "vol") == 0 && strcmp(param, "down") == 0) gevt = BTN_EVT_VOL_DOWN;
+        else mapped = false;
+        if (mapped) {
+            game_handle_button(gevt);
+            return;
+        }
+        // a többi parancs (gips, bl, screen...) a normál úton fut tovább
     }
 
     audio_status_t st;
@@ -120,6 +139,13 @@ static void cli_dispatch(const char *cmd, const char *param)
             set_backlight(v);
         } else {
             ESP_LOGW(TAG, "bl: unknown param '%s' (use up/down/max/off/0-100)", param);
+        }
+    } else if (strcmp(cmd, "gips") == 0) {
+        // CHIP-8 utasítás-büdzsé / frame (élő hangoláshoz, lásd game.c).
+        if (param[0] >= '0' && param[0] <= '9') {
+            game_set_ips(atoi(param));
+        } else {
+            ESP_LOGW(TAG, "gips: szám kell (5-200), pl. ##gips$$20##");
         }
     } else if (strcmp(cmd, "sdtest") == 0) {
         // Nyers SD-olvasási sebesség mérése (diagnosztika az USB MSC mount

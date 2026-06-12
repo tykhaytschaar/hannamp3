@@ -70,6 +70,13 @@ fájlonként pár KB.
 - **Zene**: a játék indításakor a lejátszás leáll (stop — nincs automatikus
   folytatás kilépéskor). Játék közben a display-off és a deep sleep nem
   aktiválódik.
+- **Időzítés**: a frame-határ adaptív — egy rajzolási szakasz (sűrűn követő
+  sprite-rajzolások, pl. az Invaders teljes rácsmenete) egy frame-en belül
+  fut le, a játékciklus viszont frame-enként egy iterációt halad. A tempó
+  így nem függ az utasítás-büdzsétől; a `gips` CLI-parancs csak a rajzolás
+  nélküli frame-ek plafonját állítja. Game mode alatt az LVGL 60 fps-sel
+  frissít (egyébként 30), és csak a változott területeket rajzolja újra
+  (dirty-rect lista a VM-ből).
 - A ROM betöltés után RAM-ból fut (nincs SD-hozzáférés játék közben);
   a VM quirk-profilja CHIP-48/SCHIP (a 90-es évekbeli játékpakkok ezt várják).
 
@@ -102,6 +109,7 @@ parancs csak ébreszt (nem hajtódik végre) — mint a gomboknál.
 | `screen` | `next` / `prev` | Képernyőváltás |
 | `vol` | `up` / `down` / `max` / `off` / `0–100` | Hangerő |
 | `bl` | `up` / `down` / `max` / `off` / `0–100` | Fényerő (NVS-be ment) |
+| `gips` | `5–200` | CHIP-8 utasítás-büdzsé a rajzolás nélküli frame-ekre |
 | `sdtest` | — | SD nyers olvasási sebesség mérése |
 | `usb` | — | Újraindulás USB MSC módba |
 

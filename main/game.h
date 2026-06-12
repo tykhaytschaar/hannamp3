@@ -40,3 +40,7 @@ void game_handle_button(btn_event_t evt);
 // Game picker screen: a GAMES_DIR .ch8 fájljai listában, tap = indítás,
 // Back = vissza a Settingsre. No-op, ha már nyitva van / játék fut.
 void game_show_picker(void);
+
+// Utasítás-büdzsé / 60 Hz-es adag (clampelve 5..200, default 20). A CLI
+// `gips` parancsa hívja — a "jó" érték játékfüggő, élőben hangolható.
+void game_set_ips(int ips);

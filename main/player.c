@@ -352,13 +352,13 @@ void player_handle_button(btn_event_t evt)
     if (ui_user_activity()) return;
 
     // Game mode: a fizikai gombokat a game.c nyersen pollozza (tartás-
-    // állapot kell neki) — itt a Menu fallback-kilépést kezeljük, minden
-    // más eseményt a játéknak adunk kulcs-tapként: így a CLI-ből érkező
-    // next/prev/vol/play parancsok is működnek játék közben. A player a
-    // játék nyomkodására nem reagál.
+    // állapot kell neki) — itt csak a Menu fallback-kilépést kezeljük, a
+    // többi eseményt ELDOBJUK. Kulcs-injektálás ide nem való: az esemény a
+    // felengedéskor sül el (SINGLE_CLICK), így a polling által már látott
+    // lenyomás UTÁN adna még egy szimulált tartást — duplázott mozgás. A
+    // CLI a cli.c-ből közvetlenül injektál (game_handle_button).
     if (game_is_active()) {
         if (evt == BTN_EVT_MENU) game_request_exit();
-        else                     game_handle_button(evt);
         return;
     }
 
