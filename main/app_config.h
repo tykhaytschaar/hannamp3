@@ -48,8 +48,8 @@
 // D-pad — panel bal oldal (a 17/3 a bal headeren, a 2/1 a jobbról áthúzva):
 #define PIN_BTN_UP          GPIO_NUM_17    // bal header; RTC → deep sleep wake
 #define PIN_BTN_DOWN        GPIO_NUM_3     // bal header (JTAG-sel strap, OK)
-#define PIN_BTN_LEFT        GPIO_NUM_2     // jobb header, vezeték áthúzva
-#define PIN_BTN_RIGHT       GPIO_NUM_1     // jobb header, vezeték áthúzva
+#define PIN_BTN_LEFT        GPIO_NUM_1     // jobb header, vezeték áthúzva
+#define PIN_BTN_RIGHT       GPIO_NUM_2     // jobb header, vezeték áthúzva
 // Akciógombok — panel jobb oldal (mind a jobb headeren). A GB emulátorban
 // X = Start, Y = Select (lásd gb.c), hogy a Game Boy játszható maradjon.
 #define PIN_BTN_A           GPIO_NUM_39
