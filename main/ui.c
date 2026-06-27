@@ -209,6 +209,9 @@ void ui_init(void)
     // Háttérvilágítás PWM (LEDC) a GPIO 16-on. Boot alatt duty 0 (OFF) marad —
     // hogy a panel power-on fehér flash-e és az adat-nélküli placeholder fázis
     // ne látsszon — az ui_display_ready() rámpázza a beállított fényerőre.
+    // Deep sleep előtt a lábat LOW-ra fogjuk (lásd enter_deep_sleep); ébredés
+    // után a hold-ot fel kell oldani, különben a LEDC nem tudja hajtani.
+    gpio_hold_dis(PIN_BL);
     ledc_timer_config_t bl_timer = {
         .speed_mode      = BL_LEDC_MODE,
         .timer_num       = BL_LEDC_TIMER,

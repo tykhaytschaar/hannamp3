@@ -479,6 +479,18 @@ static void on_battery(uint16_t mv, uint8_t pct)
 static void enter_deep_sleep(void)
 {
     ESP_LOGI(TAG, "deep sleep — wake source UP (GPIO %d)", PIN_BTN_UP);
+
+    // Háttérvilágítás teljes lekapcsolása és lefogása sleep idejére. A LEDC
+    // periféria deep sleepben leáll, így a GPIO 16 kimenete elengedne (lebeg),
+    // és a panel BLK lába halványan derengne. Kézi LOW + hold → tényleg sötét.
+    // Az ébredés a sima boot-úton fut (cold start); a hold-ot a ui_init backlight
+    // LEDC-init eleje oldja fel (gpio_hold_dis).
+    gpio_reset_pin(PIN_BL);
+    gpio_set_direction(PIN_BL, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_BL, 0);          // active-high BL → LOW = sötét
+    gpio_hold_en(PIN_BL);
+    gpio_deep_sleep_hold_en();
+
     esp_sleep_enable_ext1_wakeup_io(1ULL << PIN_BTN_UP, ESP_EXT1_WAKEUP_ANY_LOW);
     esp_deep_sleep_start();
 }
