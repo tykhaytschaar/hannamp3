@@ -13,6 +13,7 @@
 #include "app_config.h"
 #include "chip8.h"
 #include "game.h"
+#include "gb.h"     // gbmode_is_active (a picker közös)
 #include "io.h"
 #include "sd.h"
 #include "ui.h"
@@ -84,7 +85,7 @@ static const struct { btn_event_t evt; int key; } KEYMAP[] = {
 // --- Game screen állapot ---
 static struct {
     bool            active;
-    volatile bool   exit_req;      // Menu gomb (io task kontextus) kérte a kilépést
+    volatile bool   exit_req;      // kilépés-kérés (touch Exit / külső) — async lebontás
     lv_obj_t       *scr;
     lv_obj_t       *img;           // a játéktér (lv_image a fbuf fölött)
     lv_obj_t       *beep_dot;      // bíp-jelző a fejlécben (hang helyett villan)
@@ -185,10 +186,10 @@ static void apply_dark_bg(lv_obj_t *scr)
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 }
 
-// Fájlnév → kijelzett név (kiterjesztés nélkül).
+// Fájlnév → kijelzett név (kiterjesztés nélkül; a csonkolás szándékos).
 static void rom_display_name(const char *fname, char *out, size_t n)
 {
-    snprintf(out, n, "%s", fname);
+    strlcpy(out, fname, n);
     char *dot = strrchr(out, '.');
     if (dot) *dot = 0;
 }
@@ -506,7 +507,7 @@ static void picker_row_click(lv_event_t *e)
 
 void game_show_picker(void)
 {
-    if (G.active || P.scr) return;
+    if (G.active || gbmode_is_active() || P.scr) return;
 
     P.entries = heap_caps_calloc(MAX_DIR_ENTRIES, sizeof(dir_entry_t),
                                  MALLOC_CAP_SPIRAM);
@@ -514,7 +515,9 @@ void game_show_picker(void)
     int n = sd_list_dir(GAMES_DIR, P.entries, MAX_DIR_ENTRIES);
     P.count = 0;
     for (int i = 0; i < n; i++) {
-        if (P.entries[i].is_ch8) P.entries[P.count++] = P.entries[i];
+        if (P.entries[i].is_ch8 || P.entries[i].is_gb) {
+            P.entries[P.count++] = P.entries[i];
+        }
     }
 
     lvgl_port_lock(0);

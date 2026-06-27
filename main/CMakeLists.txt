@@ -18,6 +18,7 @@ idf_component_register(
         "usb_msc.c"
         "chip8.c"
         "game.c"
+        "gb.c"
         "fonts/mp3_inter_12.c"
         "fonts/mp3_inter_14.c"
         "fonts/mp3_inter_18.c"

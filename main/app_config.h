@@ -36,29 +36,26 @@
 #define PIN_TOUCH_RST       GPIO_NUM_47
 
 // -----------------------------------------------------------------------------
-// Gombok (mind GND-re zárnak, belső pull-up) — játék-orientált nevek
-// (Game Boy layout: D-pad + A/B/Start/Select + Menu). A player-funkciók
-// leképezése: A = play/pause, Right/Left = next/prev, Up/Down = hangerő.
+// Gombok (mind GND-re zárnak, belső pull-up) — 8 gomb, SNES-layout:
+// D-pad (panel bal oldal) + A/B/X/Y (panel jobb oldal). Nincs Menu/Start/Select
+// és nincs lakat-tolókapcsoló (a lock később egy gomb hosszú nyomására kerül).
+// Player-leképezés: A = play/pause, Right/Left = next/prev (Library: be/fel),
+// Up/Down = hangerő (Library: kurzor); B/X/Y a playerben (még) no-op.
+// Strap-lábat egyik gomb sem használ (0/45/46 szabadon) → bootkor nincs gond,
+// kivéve a GPIO 3-at (JTAG-sel strap, de égetetlen eFuse mellett közömbös, és
+// a régi firmware már bizonyítottan használta gombnak).
 // -----------------------------------------------------------------------------
-// MENU GPIO 1-en (RTC-capable), hogy deep sleep-ből EXT1 wake-forrás lehessen.
-#define PIN_BTN_MENU        GPIO_NUM_1
-#define PIN_BTN_RIGHT       GPIO_NUM_2     // volt: NEXT
-#define PIN_BTN_LEFT        GPIO_NUM_42    // volt: PREV
-#define PIN_BTN_A           GPIO_NUM_41    // volt: PLAY
-#define PIN_BTN_UP          GPIO_NUM_38    // volt: VOL_UP
-#define PIN_BTN_DOWN        GPIO_NUM_39    // volt: VOL_DOWN
-// Új gombok (B / Start / Select) — strap-megkötésekkel választott lábak:
-//   GPIO 48: onboard RGB LED DIN — a firmware nem hajtja, bemenetnek szabad
-//   GPIO 3:  JTAG-sel strap — default (égetetlen) eFuse mellett közömbös
-//   GPIO 0:  BOOT strap — futás közben szabad; reset közben nyomva tartva
-//            download mód (a devkit BOOT gombja is ezen ül, párhuzamosan OK)
-#define PIN_BTN_B           GPIO_NUM_48
-#define PIN_BTN_START       GPIO_NUM_3
-#define PIN_BTN_SELECT      GPIO_NUM_0
-
-// Lakat tolókapcsoló (slide switch) — egyik állása GND felé zár (LOW = lock).
-// Pull-up belül, polling 100 ms-onként debounce-szal.
-#define PIN_LOCK_SWITCH     GPIO_NUM_17
+// D-pad — panel bal oldal (a 17/3 a bal headeren, a 2/1 a jobbról áthúzva):
+#define PIN_BTN_UP          GPIO_NUM_17    // bal header; RTC → deep sleep wake
+#define PIN_BTN_DOWN        GPIO_NUM_3     // bal header (JTAG-sel strap, OK)
+#define PIN_BTN_LEFT        GPIO_NUM_2     // jobb header, vezeték áthúzva
+#define PIN_BTN_RIGHT       GPIO_NUM_1     // jobb header, vezeték áthúzva
+// Akciógombok — panel jobb oldal (mind a jobb headeren). A GB emulátorban
+// X = Start, Y = Select (lásd gb.c), hogy a Game Boy játszható maradjon.
+#define PIN_BTN_A           GPIO_NUM_39
+#define PIN_BTN_B           GPIO_NUM_38
+#define PIN_BTN_X           GPIO_NUM_42
+#define PIN_BTN_Y           GPIO_NUM_41
 
 // -----------------------------------------------------------------------------
 // Akku ADC: 100k:100k osztón át az 18650 (+) lábról

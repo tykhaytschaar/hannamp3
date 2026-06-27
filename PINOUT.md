@@ -4,37 +4,40 @@ ESP32-S3-DevKitC-1 N16R8 lábkiosztása a projekthez. A táblázatok a fizikai
 bekötést tükrözik. A kódbéli definíciók a [`main/app_config.h`](main/app_config.h)
 fájlban vannak.
 
-## Gombok (9 db) — játék-orientált kiosztás
+## Gombok (8 db) — SNES-layout
 
 Minden gomb egyik lába a megfelelő GPIO-ra, a **diagonálisan átellenes** lába
-GND-re. Belső pull-up engedélyezve, lenyomáskor LOW. A nevek a Game Boy
-layoutot követik (D-pad + A/B/Start/Select + Menu); a player-funkciók erre
-képeződnek le.
+GND-re. Belső pull-up engedélyezve, lenyomáskor LOW — **külső felhúzó nem
+kell**. D-pad a panel bal oldalán, A/B/X/Y a jobb oldalán. Nincs Menu/Start/
+Select gomb és nincs lakat-tolókapcsoló (a lock később egy gomb hosszú
+nyomására kerül — lásd [WIRING_TODO.md](WIRING_TODO.md)).
 
-| Gomb | ESP32-S3 GPIO | Player-funkció | Játék-funkció |
-|---|---|---|---|
-| **Menu** | **GPIO 1** | — (deep sleep wake, 500 ms hold) | Kilépés a játékból |
-| **Right** | **GPIO 2** | Következő szám / Library: belép | D-pad jobbra |
-| **Left** | **GPIO 42** | Előző szám / Library: fel | D-pad balra |
-| **A** | **GPIO 41** | Play / Pause | A (tűz/akció) |
-| **Up** | **GPIO 38** | Hangerő + / Library: kurzor fel | D-pad fel |
-| **Down** | **GPIO 39** | Hangerő − / Library: kurzor le | D-pad le |
-| **B** | **GPIO 48** | — | B |
-| **Start** | **GPIO 3** | — | Start |
-| **Select** | **GPIO 0** | — | Select |
-| **Lock** (tolókapcsoló) | **GPIO 17** | Slide switch. GND-re zár (LOW) = locked, minden gomb-event eldobódik | |
+| Gomb | ESP32-S3 GPIO | Header | Player-funkció | Játék-funkció |
+|---|---|---|---|---|
+| **Up** | **GPIO 17** | bal | Hangerő + / Library: kurzor fel | D-pad fel · deep sleep wake (500 ms hold) |
+| **Down** | **GPIO 3** | bal | Hangerő − / Library: kurzor le | D-pad le |
+| **Left** | **GPIO 2** | jobb (áthúzva) | Előző szám / Library: fel | D-pad balra |
+| **Right** | **GPIO 1** | jobb (áthúzva) | Következő szám / Library: belép | D-pad jobbra |
+| **A** | **GPIO 39** | jobb | Play / Pause | A (tűz/akció) |
+| **B** | **GPIO 38** | jobb | — | B |
+| **X** | **GPIO 42** | jobb | — | **GB: Start** |
+| **Y** | **GPIO 41** | jobb | — | **GB: Select** |
+
+A D-pad fizikailag a panel bal oldalára kerül, de a bal headeren csak a 17 és a
+3 szabad (a többit a kijelző/SD/touch/audio foglalja), ezért a Left/Right
+vezetéke a jobb headerre van **áthúzva** — pár cm, gombjelnél lényegtelen.
 
 Az `Up` és `Down` támogat **hold-to-repeat**-et: nyomva tartva ~120 ms-onként
 újra-kiadja az eventet (hangerő-rámpa).
 
-Az új gombok lábainak strap-megkötései:
-- **GPIO 48**: az onboard RGB LED DIN lába — a firmware nem hajtja, bemenetnek
-  szabad (a gomb a LED nagyimpedanciás bemenetét húzza GND-re, ártalmatlan).
-- **GPIO 3**: JTAG-sel strap — égetetlen eFuse (default) mellett közömbös.
-- **GPIO 0**: BOOT strap — futás közben szabad; ha reset közben nyomva van,
-  download módba bootol (a devkit BOOT gombja is ezen ül, párhuzamosan OK).
+Strap-megkötések:
+- **Egyik gomb sem ül a problémás strap-lábakon** (0/45/46 szabadon) → bootkor
+  nincs download-mód-kockázat.
+- **GPIO 3** (Down): JTAG-sel strap, de égetetlen eFuse (default) mellett
+  közömbös, és a régi firmware már bizonyítottan használta gombnak.
 - A **GPIO 45/46 tilos** gombnak: a 45 a VDD_SPI feszültség-strap (pull-up
   mellett 1,8 V-ra húzná a flash-t), a 46 a boot-mód strapje.
+- A korábbi B/Start/Select lábak (**48, 0**) felszabadultak, üresen maradnak.
 
 ## ST7796U 3.5" (480×320) kijelző + FT6336 touch + microSD slot
 
@@ -124,17 +127,26 @@ Jelenleg lebeg — random érték a UI-n. Funkcionálisan nem zavaró.
 - **GPIO 43, 44** — UART0 RX/TX (a COMM/UART port soros logja, ne használd
   gombnak)
 
-Jelenleg használt szabad lábak: **15, 18** (touch I2C), **47** (touch RST),
-**48, 3, 0** (B / Start / Select gombok). Szabad láb nem maradt — további
-bővítéshez I2C-s GPIO-expander vagy a strap-lábak felülvizsgálata kell.
+A gombok lábai: **17, 3** (bal header), **2, 1, 39, 38, 42, 41** (jobb header).
+Felszabadult, üresen álló lábak: **48** (onboard RGB DIN) és **0** (BOOT strap)
+— további bővítéshez ezek, illetve I2C-s GPIO-expander jöhet szóba.
 
 ## Tápellátás
 
-- USB tápláláskor a dev kit USB → 5V rail → 3V3 LDO
-- A kijelző-modul a dev kit `3V3` lábáról megy (a 74LVC245A szintillesztőn át),
-  SD-vel együtt is stabil
-- A PCM5102 a 3V3 sínről kapja a tápot — terhelése kicsi
+Akkus üzem, hatékonyság-optimalizált lánccal:
 
-Akkus tápra később:
-- 18650 (3.0–4.2 V) → védett TP4056 töltő → MT3608 boost 5V-ra → dev kit `5V`
-  láb
+- **3.7 V LiPo → TP4056 töltőmodul → buck-boost konverter (3.3 V) → a dev kit
+  `3V3` lába.** A kijelző, az SD és a PCM5102 is 3.3 V-ról megy, így nincs
+  felesleges lineáris veszteség (a buck-boost ~90%).
+- **Az onboard 3V3 LDO le van forrasztva a panelról.** Ezért amikor USB-t
+  dugsz be (flash/monitor), az csak **adatot + GND-t** visz — az USB-5V → LDO
+  → 3V3 út megszűnt, így **nincs két 3.3 V forrás ütközése** a 3V3 sínen.
+  A natív-USB Serial-JTAG a chip 3V3-járól megy (a buck-boost adja), a UART-
+  híd a saját USB-VBUS-áról kap tápot → mindkét flash-út működik.
+- A buck-boost és az akku **nem veszik fel a kapcsolatot az USB-vel**: az ESP
+  USB-VBUS-a nem megy vissza a töltőre, az akkut nem tölti/terheli.
+- **A 5V lábra ne köss semmit**, amíg az „IN-OUT" jumper zárt és USB is be
+  lehet dugva — különben az USB-VBUS visszatáplálná (lásd a klón devkit
+  IN-OUT áthidalóját).
+- A PCM5102 terhelése kicsi; a háttérvilágítás (GPIO 16, LEDC PWM) a legnagyobb
+  fogyasztó a 3V3 sínen.

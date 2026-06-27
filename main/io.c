@@ -75,29 +75,6 @@ static void setup_button(int gpio, btn_event_t evt, bool repeat_on_hold)
     }
 }
 
-// MENU külön kezelést kap: short = screen váltás, long = SD rescan.
-static void setup_menu_button(int gpio)
-{
-    button_config_t cfg = {
-        .type = BUTTON_TYPE_GPIO,
-        .long_press_time = 800,
-        .short_press_time = 80,
-        .gpio_button_config = {
-            .gpio_num     = gpio,
-            .active_level = 0,
-        },
-    };
-    button_handle_t h = iot_button_create(&cfg);
-    if (!h) {
-        ESP_LOGE(TAG, "iot_button_create failed for GPIO %d", gpio);
-        return;
-    }
-    iot_button_register_cb(h, BUTTON_SINGLE_CLICK,    on_btn,
-                           (void *)(intptr_t)BTN_EVT_MENU);
-    iot_button_register_cb(h, BUTTON_LONG_PRESS_START, on_btn,
-                           (void *)(intptr_t)BTN_EVT_MENU_LONG);
-}
-
 uint8_t io_battery_percent_from_mv(uint16_t mv)
 {
     if (mv >= BAT_FULL_MV)  return 100;
@@ -137,29 +114,8 @@ static void battery_task(void *arg)
     }
 }
 
-// LOCK tolókapcsoló pollozása. Polling 100 ms-onként + 30 ms debounce
-// (slide switch néha visszapattan).
-static void lock_task(void *arg)
-{
-    bool prev_raw = (gpio_get_level(PIN_LOCK_SWITCH) == 0);
-    s_locked = prev_raw;
-    if (s_lock_cb) s_lock_cb(s_locked);
-
-    while (1) {
-        vTaskDelay(pdMS_TO_TICKS(100));
-        bool now_raw = (gpio_get_level(PIN_LOCK_SWITCH) == 0);
-        if (now_raw != prev_raw) {
-            vTaskDelay(pdMS_TO_TICKS(30));
-            now_raw = (gpio_get_level(PIN_LOCK_SWITCH) == 0);
-        }
-        if (now_raw != s_locked) {
-            s_locked = now_raw;
-            if (s_lock_cb) s_lock_cb(s_locked);
-        }
-        prev_raw = now_raw;
-    }
-}
-
+// A lakat slide switch megszűnt. A lock-állapotot később egy gomb hosszú
+// nyomása fogja billenteni (TODO) — addig s_locked végig false marad.
 bool io_is_locked(void) { return s_locked; }
 
 // Nyers gombállapot a game mode polling-jához. A gombok GND-re zárnak
@@ -167,16 +123,14 @@ bool io_is_locked(void) { return s_locked; }
 static int evt_to_gpio(btn_event_t evt)
 {
     switch (evt) {
-    case BTN_EVT_A:         return PIN_BTN_A;
-    case BTN_EVT_B:         return PIN_BTN_B;
-    case BTN_EVT_UP:        return PIN_BTN_UP;
-    case BTN_EVT_DOWN:      return PIN_BTN_DOWN;
-    case BTN_EVT_LEFT:      return PIN_BTN_LEFT;
-    case BTN_EVT_RIGHT:     return PIN_BTN_RIGHT;
-    case BTN_EVT_START:     return PIN_BTN_START;
-    case BTN_EVT_SELECT:    return PIN_BTN_SELECT;
-    case BTN_EVT_MENU:
-    case BTN_EVT_MENU_LONG: return PIN_BTN_MENU;
+    case BTN_EVT_A:     return PIN_BTN_A;
+    case BTN_EVT_B:     return PIN_BTN_B;
+    case BTN_EVT_UP:    return PIN_BTN_UP;
+    case BTN_EVT_DOWN:  return PIN_BTN_DOWN;
+    case BTN_EVT_LEFT:  return PIN_BTN_LEFT;
+    case BTN_EVT_RIGHT: return PIN_BTN_RIGHT;
+    case BTN_EVT_X:     return PIN_BTN_X;
+    case BTN_EVT_Y:     return PIN_BTN_Y;
     }
     return -1;
 }
@@ -187,17 +141,41 @@ bool io_button_down(btn_event_t evt)
     return pin >= 0 && gpio_get_level(pin) == 0;
 }
 
+// IDEIGLENES: nyers gombállapot-logoló. Az iot_button mellett fut, a live
+// GPIO-szintet olvassa (a setup_button már pull-uppal inputra állította).
+static void btn_debug_task(void *arg)
+{
+    static const struct { int gpio; const char *name; } P[] = {
+        { PIN_BTN_UP, "Up" }, { PIN_BTN_DOWN, "Down" }, { PIN_BTN_LEFT, "Left" },
+        { PIN_BTN_RIGHT, "Right" }, { PIN_BTN_A, "A" }, { PIN_BTN_B, "B" },
+        { PIN_BTN_X, "X" }, { PIN_BTN_Y, "Y" },
+    };
+    int prev[8];
+    for (int i = 0; i < 8; i++) prev[i] = gpio_get_level(P[i].gpio);
+    ESP_LOGW(TAG, "BTN-DEBUG aktiv — nyomkodj gombokat, figyeld a logot");
+    while (1) {
+        for (int i = 0; i < 8; i++) {
+            int lv = gpio_get_level(P[i].gpio);
+            if (lv != prev[i]) {
+                ESP_LOGW(TAG, "%-6s GPIO %2d -> %s", P[i].name, P[i].gpio,
+                         lv ? "fel" : "LENYOMVA");
+                prev[i] = lv;
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(30));
+    }
+}
+
 void io_init(void)
 {
-    setup_button(PIN_BTN_A,      BTN_EVT_A,      false);
-    setup_button(PIN_BTN_B,      BTN_EVT_B,      false);
-    setup_button(PIN_BTN_RIGHT,  BTN_EVT_RIGHT,  false);
-    setup_button(PIN_BTN_LEFT,   BTN_EVT_LEFT,   false);
-    setup_button(PIN_BTN_START,  BTN_EVT_START,  false);
-    setup_button(PIN_BTN_SELECT, BTN_EVT_SELECT, false);
-    setup_menu_button(PIN_BTN_MENU);                       // short + long
-    setup_button(PIN_BTN_UP,     BTN_EVT_UP,     true);    // hold = vol ramp
-    setup_button(PIN_BTN_DOWN,   BTN_EVT_DOWN,   true);
+    setup_button(PIN_BTN_A,     BTN_EVT_A,     false);
+    setup_button(PIN_BTN_B,     BTN_EVT_B,     false);
+    setup_button(PIN_BTN_X,     BTN_EVT_X,     false);
+    setup_button(PIN_BTN_Y,     BTN_EVT_Y,     false);
+    setup_button(PIN_BTN_RIGHT, BTN_EVT_RIGHT, false);
+    setup_button(PIN_BTN_LEFT,  BTN_EVT_LEFT,  false);
+    setup_button(PIN_BTN_UP,    BTN_EVT_UP,    true);    // hold = vol ramp
+    setup_button(PIN_BTN_DOWN,  BTN_EVT_DOWN,  true);
 
     // ---- ADC1 oneshot a battery-hez ----
     adc_oneshot_unit_init_cfg_t u = { .unit_id = ADC_UNIT_1, .ulp_mode = ADC_ULP_MODE_DISABLE };
@@ -218,16 +196,11 @@ void io_init(void)
 
     xTaskCreate(battery_task, "battery", 4096, NULL, 3, NULL);
 
-    // ---- LOCK tolókapcsoló ----
-    gpio_config_t lk = {
-        .pin_bit_mask = 1ULL << PIN_LOCK_SWITCH,
-        .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
-        .pull_down_en = GPIO_PULLDOWN_DISABLE,
-        .intr_type = GPIO_INTR_DISABLE,
-    };
-    gpio_config(&lk);
-    xTaskCreate(lock_task, "lock", 2048, NULL, 3, NULL);
+    // ---- IDEIGLENES gomb-diagnosztika ----
+    // Nyers GPIO-szint pollozás mind a 8 gombra, váltáskor logol. Megkerüli az
+    // iot_button-t → eldönti, hogy a Bal/Jobb (GPIO 2/1) láb reagál-e (FW), vagy
+    // a vezeték a hibás (HW). Mérés után törlendő.
+    xTaskCreate(btn_debug_task, "btndbg", 3072, NULL, 3, NULL);
 }
 
 void io_register_button_cb(btn_cb_t cb)   { s_btn_cb  = cb; }

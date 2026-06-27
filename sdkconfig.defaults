@@ -70,3 +70,7 @@ CONFIG_LV_FONT_MONTSERRAT_24=y
 # timeoutot → "FATManager failed to init". Multi-block olvasással belefér.
 CONFIG_TINYUSB_MSC_ENABLED=y
 CONFIG_TINYUSB_MSC_BUFSIZE=8192
+
+# Teljesítmény-optimalizált fordítás (-O2) — a GB-emulációnak és az
+# MP3-dekódernek is számít; flash-hely bőven van.
+CONFIG_COMPILER_OPTIMIZATION_PERF=y

@@ -68,16 +68,16 @@ static void init_static_low_pins(void)
 
 static const char *TAG = "main";
 
-// Deep sleep wake esetén megköveteljük, hogy a Menu gomb 500 ms-ig le legyen
-// nyomva. Ha közben elengedik (véletlen érintés), azonnal visszaalszunk a
-// teljes inicializálás megspórolásával. Ezt main.c eleje kell, mielőtt
+// Deep sleep wake esetén megköveteljük, hogy a Fel (Up) gomb 500 ms-ig le
+// legyen nyomva. Ha közben elengedik (véletlen érintés), azonnal visszaalszunk
+// a teljes inicializálás megspórolásával. Ezt main.c eleje kell, mielőtt
 // drága init-ek lefutnak.
 static void deep_sleep_wake_gate(void)
 {
     if (esp_sleep_get_wakeup_cause() != ESP_SLEEP_WAKEUP_EXT1) return;
 
     gpio_config_t mc = {
-        .pin_bit_mask = 1ULL << PIN_BTN_MENU,
+        .pin_bit_mask = 1ULL << PIN_BTN_UP,
         .mode = GPIO_MODE_INPUT,
         .pull_up_en = GPIO_PULLUP_ENABLE,
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
@@ -88,8 +88,8 @@ static void deep_sleep_wake_gate(void)
     // 500 ms folyamatosan LOW kell. 25 × 20 ms minta — bármikor felenged → re-sleep.
     for (int i = 0; i < 25; i++) {
         vTaskDelay(pdMS_TO_TICKS(20));
-        if (gpio_get_level(PIN_BTN_MENU) != 0) {
-            esp_sleep_enable_ext1_wakeup_io(1ULL << PIN_BTN_MENU, ESP_EXT1_WAKEUP_ANY_LOW);
+        if (gpio_get_level(PIN_BTN_UP) != 0) {
+            esp_sleep_enable_ext1_wakeup_io(1ULL << PIN_BTN_UP, ESP_EXT1_WAKEUP_ANY_LOW);
             esp_deep_sleep_start();
         }
     }

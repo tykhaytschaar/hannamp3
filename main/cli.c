@@ -14,6 +14,7 @@
 #include "io.h"
 #include "ui.h"
 #include "game.h"
+#include "gb.h"
 
 static const char *TAG = "cli";
 
@@ -47,23 +48,27 @@ static void cli_dispatch(const char *cmd, const char *param)
         return;
     }
 
-    // Game mode: a gombokra kötött parancsok a játék kulcsait ütik
-    // (rövid szimulált tap) — a player ilyenkor nem kap eseményt.
-    if (game_is_active()) {
+    // Game mode (CHIP-8 / GB): a gombokra kötött parancsok a játék kulcsait
+    // ütik (rövid szimulált tap) — a player ilyenkor nem kap eseményt.
+    if (game_is_active() || gbmode_is_active()) {
         btn_event_t gevt;
         bool mapped = true;
         if      (strcmp(cmd, "play") == 0)   gevt = BTN_EVT_A;
         else if (strcmp(cmd, "a") == 0)      gevt = BTN_EVT_A;
         else if (strcmp(cmd, "b") == 0)      gevt = BTN_EVT_B;
-        else if (strcmp(cmd, "start") == 0)  gevt = BTN_EVT_START;
-        else if (strcmp(cmd, "select") == 0) gevt = BTN_EVT_SELECT;
+        // X = GB Start, Y = GB Select — a start/select aliasok megmaradnak.
+        else if (strcmp(cmd, "x") == 0)      gevt = BTN_EVT_X;
+        else if (strcmp(cmd, "y") == 0)      gevt = BTN_EVT_Y;
+        else if (strcmp(cmd, "start") == 0)  gevt = BTN_EVT_X;
+        else if (strcmp(cmd, "select") == 0) gevt = BTN_EVT_Y;
         else if (strcmp(cmd, "next") == 0)   gevt = BTN_EVT_RIGHT;
         else if (strcmp(cmd, "prev") == 0)   gevt = BTN_EVT_LEFT;
         else if (strcmp(cmd, "vol") == 0 && strcmp(param, "up") == 0)   gevt = BTN_EVT_UP;
         else if (strcmp(cmd, "vol") == 0 && strcmp(param, "down") == 0) gevt = BTN_EVT_DOWN;
         else mapped = false;
         if (mapped) {
-            game_handle_button(gevt);
+            if (game_is_active()) game_handle_button(gevt);
+            else                  gbmode_handle_button(gevt);
             return;
         }
         // a többi parancs (gips, bl, screen...) a normál úton fut tovább
