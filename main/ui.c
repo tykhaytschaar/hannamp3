@@ -244,9 +244,9 @@ void ui_init(void)
         .hres = LCD_H_RES,
         .vres = LCD_V_RES,
         .monochrome = false,
-        // ST7796 fekvő (swap_xy). 180°-ra forgatva: mindkét mirror flag false.
-        // (BGR-fix a dev_cfg-ben.) EMPIRIKUS KNOB #2.
-        .rotation = { .swap_xy = true, .mirror_x = false, .mirror_y = false },
+        // ST7796 fekvő (swap_xy). 180°-kal elforgatva (a végső dizájn-tájolás):
+        // mindkét mirror flag true. (BGR-fix a dev_cfg-ben.) EMPIRIKUS KNOB #2.
+        .rotation = { .swap_xy = true, .mirror_x = true, .mirror_y = true },
         .flags = { .buff_dma = true, .buff_spiram = false, .swap_bytes = true },
     };
     s_disp = lvgl_port_add_disp(&disp_cfg);
@@ -320,17 +320,17 @@ static void ui_touch_init(void)
 
     // ---- FT5x06/FT6336 touch driver ----
     // x_max/y_max a panel natív felbontása (320×480 portré, a mirror ezzel
-    // számol). Tájolás a kijelzőhöz igazítva (panelen mérve):
+    // számol). Tájolás a kijelzőhöz igazítva, a kijelző 180°-os forgatásával
+    // együtt: mindkét mirror flaget átbillentve a korábbihoz képest.
     //   swap_xy=1  — a nyers x (függőleges) az LVGL-Y-ba
-    //   mirror_x=1 — a függőleges fordított volt (fent 320 → 0)
-    //   mirror_y=0 — a vízszintes jó
+    //   mirror_x=0 / mirror_y=1 — a 180°-kal forgatott kijelzőhöz igazítva
     esp_lcd_touch_config_t tp_cfg = {
         .x_max = 320,
         .y_max = 480,
         .rst_gpio_num = PIN_TOUCH_RST,
         .int_gpio_num = GPIO_NUM_NC,            // polling — nincs INT láb
         .levels = { .reset = 0, .interrupt = 0 },
-        .flags = { .swap_xy = 1, .mirror_x = 1, .mirror_y = 0 },
+        .flags = { .swap_xy = 1, .mirror_x = 0, .mirror_y = 1 },
     };
     if (esp_lcd_touch_new_i2c_ft5x06(tp_io, &tp_cfg, &s_touch) != ESP_OK) {
         ESP_LOGE(TAG, "touch init failed — ellenőrizd a bekötést / pull-upokat");
@@ -974,7 +974,8 @@ static void browser_rebuild_list(void)
     for (int i = 0; i < U.br_count; i++) {
         if (U.br_entries[i].is_dir) continue;
         if      (U.br_entries[i].is_m3u)  m3u_count++;
-        else if (!U.br_entries[i].is_ch8) any_file = true;   // a ch8 nem zene
+        else if (!U.br_entries[i].is_ch8 &&
+                 !U.br_entries[i].is_gb)  any_file = true;   // a ROM nem zene
     }
 
     // Parent ".." sor, ha nem gyökérben vagyunk (UI-only, user_data = -1).
@@ -1004,10 +1005,10 @@ static void browser_rebuild_list(void)
         return;
     }
     for (int i = 0; i < U.br_count; i++) {
-        // Mappa = folder ikon, m3u/ch8 = play ikon, zenefájl = audio ikon.
+        // Mappa = folder ikon, m3u/játék-ROM = play ikon, zenefájl = audio ikon.
         const char *icon = U.br_entries[i].is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_AUDIO;
         const char *text = U.br_entries[i].name;
-        if (U.br_entries[i].is_ch8) icon = LV_SYMBOL_PLAY;
+        if (U.br_entries[i].is_ch8 || U.br_entries[i].is_gb) icon = LV_SYMBOL_PLAY;
         if (U.br_entries[i].is_m3u) {
             icon = LV_SYMBOL_PLAY;
             // Egyetlen playlist → beszédes "Play all" felirat; többnél a

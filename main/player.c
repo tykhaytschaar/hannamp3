@@ -15,6 +15,7 @@
 #include "io.h"
 #include "player.h"
 #include "game.h"
+#include "gb.h"
 #include "esp_timer.h"
 #include "esp_sleep.h"
 #include "driver/gpio.h"
@@ -224,10 +225,15 @@ static bool advance_album(int dir, bool autoplay);
 // Játék indításakor a zene leáll (stop, nem pause — nincs automatikus
 // folytatás kilépéskor): a játék után a Play gomb a kiválasztott tracket
 // elölről indítja. Betöltési hibánál a lejátszáshoz nem nyúlunk.
+// Kiterjesztés szerint dönt: .gb → Game Boy mód (gb.c), egyébként CHIP-8.
 void player_launch_game(const char *path)
 {
-    if (game_is_active()) return;
-    if (game_start(path, NULL)) {
+    if (game_is_active() || gbmode_is_active()) return;
+    const char *ext = strrchr(path, '.');
+    bool is_gb = ext && strcasecmp(ext, ".gb") == 0;
+    bool started = is_gb ? gbmode_start(path, NULL)
+                         : game_start(path, NULL);
+    if (started) {
         audio_stop();
         ui_set_state(AUDIO_STATE_STOPPED);
         ui_set_progress(0, 0);
@@ -248,9 +254,9 @@ static void browser_activate(void)
     char target[512];
     snprintf(target, sizeof(target), "%.383s/%.127s", s_bpath, ent->name);
 
-    if (ent->is_ch8) {
-        // CHIP-8 ROM: game mode — a lejátszási listához nem nyúlunk, a zene
-        // szüneteltetését/folytatását a player_launch_game intézi.
+    if (ent->is_ch8 || ent->is_gb) {
+        // Játék-ROM: game mode (CHIP-8 / GB) — a lejátszási listához nem
+        // nyúlunk, a zene leállítását a player_launch_game intézi.
         player_launch_game(target);
         return;
     }
@@ -351,14 +357,14 @@ void player_handle_button(btn_event_t evt)
     // egy gombnyomás kell, hogy érvényesüljön.
     if (ui_user_activity()) return;
 
-    // Game mode: a fizikai gombokat a game.c nyersen pollozza (tartás-
-    // állapot kell neki) — itt csak a Menu fallback-kilépést kezeljük, a
-    // többi eseményt ELDOBJUK. Kulcs-injektálás ide nem való: az esemény a
-    // felengedéskor sül el (SINGLE_CLICK), így a polling által már látott
-    // lenyomás UTÁN adna még egy szimulált tartást — duplázott mozgás. A
-    // CLI a cli.c-ből közvetlenül injektál (game_handle_button).
-    if (game_is_active()) {
-        if (evt == BTN_EVT_MENU) game_request_exit();
+    // Game mode (CHIP-8 vagy GB): a fizikai gombokat a játék nyersen
+    // pollozza (tartás-állapot kell neki) — itt MINDEN eseményt ELDOBUNK.
+    // Kulcs-injektálás ide nem való: az esemény a felengedéskor sül el
+    // (SINGLE_CLICK), így a polling által már látott lenyomás UTÁN adna még
+    // egy szimulált tartást — duplázott mozgás. A CLI a cli.c-ből injektál.
+    // Kilépés: egyelőre a fejléc touch "Exit" gombjával (game.c/gb.c).
+    // TODO: fizikai gombos kilépés (gomb-kombó) — lásd a backlog-ot.
+    if (game_is_active() || gbmode_is_active()) {
         return;
     }
 
@@ -434,17 +440,10 @@ void player_handle_button(btn_event_t evt)
         break;
     }
 
-    case BTN_EVT_MENU:
-    case BTN_EVT_MENU_LONG:
-        // A MENU gombnak nincs UI-funkciója: a képernyőváltás touch swipe-ra
-        // került, a mappa-újraolvasás megszűnt. A gomb csak deep sleep
-        // wake-forrás (RTC GPIO 1, lásd main.c).
-        break;
-
     case BTN_EVT_B:
-    case BTN_EVT_START:
-    case BTN_EVT_SELECT:
-        // Játék-gombok — a player módban (egyelőre) nincs funkciójuk.
+    case BTN_EVT_X:
+    case BTN_EVT_Y:
+        // Akciógombok — a player módban (egyelőre) nincs funkciójuk.
         break;
 
     case BTN_EVT_UP:
@@ -473,14 +472,14 @@ static void on_battery(uint16_t mv, uint8_t pct)
     ui_set_battery(mv, pct);
 }
 
-// Deep sleep: csak Menu gombról ébredünk (RTC GPIO 1, EXT1 wake = LOW level).
+// Deep sleep: a Fel (Up) gombról ébredünk (RTC GPIO 17, EXT1 wake = LOW level).
 // Boot oldalon (main.c) a wake-after 500 ms-os hold-check validálja.
 #define SLEEP_IDLE_MS  (60 * 1000)   // 1 perc tétlenség + nincs lejátszás → sleep
 
 static void enter_deep_sleep(void)
 {
-    ESP_LOGI(TAG, "deep sleep — wake source MENU (GPIO %d)", PIN_BTN_MENU);
-    esp_sleep_enable_ext1_wakeup_io(1ULL << PIN_BTN_MENU, ESP_EXT1_WAKEUP_ANY_LOW);
+    ESP_LOGI(TAG, "deep sleep — wake source UP (GPIO %d)", PIN_BTN_UP);
+    esp_sleep_enable_ext1_wakeup_io(1ULL << PIN_BTN_UP, ESP_EXT1_WAKEUP_ANY_LOW);
     esp_deep_sleep_start();
 }
 
@@ -592,7 +591,8 @@ static void player_task(void *arg)
         // Sleep döntés: ha enabled, és nincs lejátszás SLEEP_IDLE_MS óta.
         // Playing alatt a timer folyamatosan resettelődik (sose alszik el).
         // A futó játék is aktivitás — játék közben nem mehetünk deep sleep-be.
-        if (st.state == AUDIO_STATE_PLAYING || game_is_active()) {
+        if (st.state == AUDIO_STATE_PLAYING || game_is_active() ||
+            gbmode_is_active()) {
             not_playing_since_us = esp_timer_get_time();
         } else if (ui_get_sleep_enabled()) {
             int64_t idle_ms = (esp_timer_get_time() - not_playing_since_us) / 1000;
