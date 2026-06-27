@@ -16,12 +16,11 @@ typedef struct {
 } track_t;
 
 // Egy könyvtár-bejegyzés a böngészőhöz (almappa, zenefájl, m3u playlist
-// vagy CHIP-8 ROM).
+// vagy Game Boy ROM).
 typedef struct {
     char name[128];   // a bejegyzés neve (mappánál a mappanév, fájlnál a fájlnév kiterjesztéssel)
     bool is_dir;      // true = almappa
     bool is_m3u;      // true = .m3u/.m3u8 playlist (a UI "Play all" sorként mutatja)
-    bool is_ch8;      // true = .ch8 CHIP-8 ROM (tap = game mode, lásd game.c)
     bool is_gb;       // true = .gb Game Boy ROM (tap = GB mode, lásd gb.c)
 } dir_entry_t;
 

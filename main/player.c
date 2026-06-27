@@ -14,7 +14,6 @@
 #include "ui.h"
 #include "io.h"
 #include "player.h"
-#include "game.h"
 #include "gb.h"
 #include "esp_timer.h"
 #include "esp_sleep.h"
@@ -225,14 +224,11 @@ static bool advance_album(int dir, bool autoplay);
 // Játék indításakor a zene leáll (stop, nem pause — nincs automatikus
 // folytatás kilépéskor): a játék után a Play gomb a kiválasztott tracket
 // elölről indítja. Betöltési hibánál a lejátszáshoz nem nyúlunk.
-// Kiterjesztés szerint dönt: .gb → Game Boy mód (gb.c), egyébként CHIP-8.
+// Csak .gb ROM-ot indít — Game Boy mód (gb.c).
 void player_launch_game(const char *path)
 {
-    if (game_is_active() || gbmode_is_active()) return;
-    const char *ext = strrchr(path, '.');
-    bool is_gb = ext && strcasecmp(ext, ".gb") == 0;
-    bool started = is_gb ? gbmode_start(path, NULL)
-                         : game_start(path, NULL);
+    if (gbmode_is_active()) return;
+    bool started = gbmode_start(path, NULL);
     if (started) {
         audio_stop();
         ui_set_state(AUDIO_STATE_STOPPED);
@@ -254,9 +250,9 @@ static void browser_activate(void)
     char target[512];
     snprintf(target, sizeof(target), "%.383s/%.127s", s_bpath, ent->name);
 
-    if (ent->is_ch8 || ent->is_gb) {
-        // Játék-ROM: game mode (CHIP-8 / GB) — a lejátszási listához nem
-        // nyúlunk, a zene leállítását a player_launch_game intézi.
+    if (ent->is_gb) {
+        // Game Boy ROM: GB mód — a lejátszási listához nem nyúlunk, a zene
+        // leállítását a player_launch_game intézi.
         player_launch_game(target);
         return;
     }
@@ -357,14 +353,13 @@ void player_handle_button(btn_event_t evt)
     // egy gombnyomás kell, hogy érvényesüljön.
     if (ui_user_activity()) return;
 
-    // Game mode (CHIP-8 vagy GB): a fizikai gombokat a játék nyersen
-    // pollozza (tartás-állapot kell neki) — itt MINDEN eseményt ELDOBUNK.
-    // Kulcs-injektálás ide nem való: az esemény a felengedéskor sül el
-    // (SINGLE_CLICK), így a polling által már látott lenyomás UTÁN adna még
-    // egy szimulált tartást — duplázott mozgás. A CLI a cli.c-ből injektál.
-    // Kilépés: egyelőre a fejléc touch "Exit" gombjával (game.c/gb.c).
-    // TODO: fizikai gombos kilépés (gomb-kombó) — lásd a backlog-ot.
-    if (game_is_active() || gbmode_is_active()) {
+    // GB mód: a fizikai gombokat a játék nyersen pollozza (tartás-állapot kell
+    // neki) — itt MINDEN eseményt ELDOBUNK. Kulcs-injektálás ide nem való: az
+    // esemény a felengedéskor sül el (SINGLE_CLICK), így a polling által már
+    // látott lenyomás UTÁN adna még egy szimulált tartást — duplázott mozgás.
+    // A CLI a cli.c-ből injektál. Kilépés: egyelőre a fejléc touch "Exit"
+    // gombjával (gb.c). TODO: fizikai gombos kilépés (gomb-kombó).
+    if (gbmode_is_active()) {
         return;
     }
 
@@ -603,8 +598,7 @@ static void player_task(void *arg)
         // Sleep döntés: ha enabled, és nincs lejátszás SLEEP_IDLE_MS óta.
         // Playing alatt a timer folyamatosan resettelődik (sose alszik el).
         // A futó játék is aktivitás — játék közben nem mehetünk deep sleep-be.
-        if (st.state == AUDIO_STATE_PLAYING || game_is_active() ||
-            gbmode_is_active()) {
+        if (st.state == AUDIO_STATE_PLAYING || gbmode_is_active()) {
             not_playing_since_us = esp_timer_get_time();
         } else if (ui_get_sleep_enabled()) {
             int64_t idle_ms = (esp_timer_get_time() - not_playing_since_us) / 1000;

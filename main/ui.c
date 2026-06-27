@@ -784,7 +784,7 @@ static void usb_storage_row_click(lv_event_t *e)
     usb_msc_request_reboot();   // sosem tér vissza
 }
 
-// Games gomb tap → CHIP-8 game picker (game.c). Alvó kijelzőn csak ébreszt.
+// Games gomb tap → Game Boy ROM-picker (game.c). Alvó kijelzőn csak ébreszt.
 static void games_row_click(lv_event_t *e)
 {
     (void)e;
@@ -854,7 +854,7 @@ static void build_settings(void)
         if (U.set_row[i]) lv_obj_set_style_pad_left(U.set_row[i], 12, LV_PART_MAIN);
     }
 
-    // Games — gomb (akció): a /sdcard/games CHIP-8 ROM-jainak választólistája
+    // Games — gomb (akció): a /sdcard/games Game Boy ROM-jainak választólistája
     // (game.c picker). Stílusban az USB Storage gomb párja.
     {
         lv_obj_t *btn = lv_button_create(panel);
@@ -977,8 +977,7 @@ static void browser_rebuild_list(void)
     for (int i = 0; i < U.br_count; i++) {
         if (U.br_entries[i].is_dir) continue;
         if      (U.br_entries[i].is_m3u)  m3u_count++;
-        else if (!U.br_entries[i].is_ch8 &&
-                 !U.br_entries[i].is_gb)  any_file = true;   // a ROM nem zene
+        else if (!U.br_entries[i].is_gb)  any_file = true;   // a ROM nem zene
     }
 
     // Parent ".." sor, ha nem gyökérben vagyunk (UI-only, user_data = -1).
@@ -1011,7 +1010,7 @@ static void browser_rebuild_list(void)
         // Mappa = folder ikon, m3u/játék-ROM = play ikon, zenefájl = audio ikon.
         const char *icon = U.br_entries[i].is_dir ? LV_SYMBOL_DIRECTORY : LV_SYMBOL_AUDIO;
         const char *text = U.br_entries[i].name;
-        if (U.br_entries[i].is_ch8 || U.br_entries[i].is_gb) icon = LV_SYMBOL_PLAY;
+        if (U.br_entries[i].is_gb) icon = LV_SYMBOL_PLAY;
         if (U.br_entries[i].is_m3u) {
             icon = LV_SYMBOL_PLAY;
             // Egyetlen playlist → beszédes "Play all" felirat; többnél a

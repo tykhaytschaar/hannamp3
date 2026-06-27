@@ -83,7 +83,7 @@
 // -----------------------------------------------------------------------------
 #define SD_MOUNT_POINT      "/sdcard"
 #define MUSIC_DIR           "/sdcard/music"
-#define GAMES_DIR           "/sdcard/games"   // CHIP-8 .ch8 ROM-ok (Settings → Games)
+#define GAMES_DIR           "/sdcard/games"   // Game Boy .gb ROM-ok (Settings → Games)
 #define MAX_TRACKS          128
 #define MAX_DIR_ENTRIES     128
 #define MAX_PATH_LEN        256

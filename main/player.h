@@ -48,6 +48,6 @@ void player_browser_up(void);
 // betöltése név-sorrendben + play az elsőtől + Now Playing. Alvón csak ébreszt.
 void player_browser_play_all(void);
 
-// CHIP-8 játék indítása (a Settings → Games picker és a Library .ch8 sora
-// hívja). Ha szól zene, szünetelteti; a játékból kilépve folytatja.
+// Game Boy ROM indítása (a Settings → Games picker és a Library .gb sora
+// hívja). A zenét leállítja; a játékból kilépve nem folytatja.
 void player_launch_game(const char *path);
