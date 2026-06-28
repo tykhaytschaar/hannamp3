@@ -357,7 +357,7 @@ static void build_screen(const char *title)
     lv_obj_add_event_cb(exit_btn, exit_btn_click, LV_EVENT_CLICKED, NULL);
     lv_obj_t *xl = lv_label_create(exit_btn);
     lv_obj_set_style_text_color(xl, COL_ACCENT, 0);
-    lv_label_set_text(xl, LV_SYMBOL_LEFT " Exit");
+    lv_label_set_text(xl, LV_SYMBOL_LEFT " Kilépés");
     lv_obj_center(xl);
 
     // D-pad: fel / (balra|jobbra) / le. ASCII feliratok — a saját fontok

@@ -468,7 +468,7 @@ static void build_overlay(void)
     // Oldalnév középen.
     U.ovr_screen_chip = lv_label_create(top);
     lv_obj_set_style_text_color(U.ovr_screen_chip, COL_ACCENT, LV_PART_MAIN);
-    lv_label_set_text(U.ovr_screen_chip, "NOW PLAYING");
+    lv_label_set_text(U.ovr_screen_chip, "LEJÁTSZÁS");
     lv_obj_align(U.ovr_screen_chip, LV_ALIGN_TOP_MID, 0, 6);
 
     U.ovr_battery = lv_label_create(top);
@@ -514,7 +514,7 @@ static void build_overlay(void)
 
 static void update_screen_chip(void)
 {
-    static const char *labels[UI_SCREEN_COUNT] = { "NOW PLAYING", "LIBRARY", "SETTINGS" };
+    static const char *labels[UI_SCREEN_COUNT] = { "LEJÁTSZÁS", "KÖNYVTÁR", "BEÁLLÍTÁSOK" };
     if (!U.ovr_screen_chip) return;
     lv_label_set_text(U.ovr_screen_chip, labels[U.current]);
 }
@@ -830,20 +830,20 @@ static void build_settings(void)
 
     // (A hangerő-csúszka a headerben él — lásd build_overlay.)
     U.set_row[UI_SETTING_BACKLIGHT] =
-        settings_slider_row(panel, NULL, "Brightness", s_bl_percent,
+        settings_slider_row(panel, NULL, "Fényerő", s_bl_percent,
                             sld_backlight_cb, &U.set_sld_backlight, &U.set_val_backlight);
     U.set_row[UI_SETTING_IDLE_TIMEOUT] =
-        settings_row(panel, NULL, "Display off", &U.set_val_idle);
+        settings_row(panel, NULL, "Kijelző ki", &U.set_val_idle);
     lv_obj_add_flag(U.set_row[UI_SETTING_IDLE_TIMEOUT], LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(U.set_row[UI_SETTING_IDLE_TIMEOUT], display_off_row_click,
                         LV_EVENT_CLICKED, NULL);
     U.set_row[UI_SETTING_SLEEP] =
-        settings_row(panel, NULL, "Sleep", &U.set_val_sleep);
+        settings_row(panel, NULL, "Alvás", &U.set_val_sleep);
     lv_obj_add_flag(U.set_row[UI_SETTING_SLEEP], LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(U.set_row[UI_SETTING_SLEEP], sleep_row_click,
                         LV_EVENT_CLICKED, NULL);
     U.set_row[UI_SETTING_ALBUM_END] =
-        settings_row(panel, NULL, "Album end", &U.set_val_album_end);
+        settings_row(panel, NULL, "Album vége", &U.set_val_album_end);
     lv_obj_add_flag(U.set_row[UI_SETTING_ALBUM_END], LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(U.set_row[UI_SETTING_ALBUM_END], album_end_row_click,
                         LV_EVENT_CLICKED, NULL);
@@ -866,7 +866,7 @@ static void build_settings(void)
         lv_obj_add_event_cb(btn, games_row_click, LV_EVENT_CLICKED, NULL);
         lv_obj_t *lbl = lv_label_create(btn);
         lv_obj_set_style_text_color(lbl, COL_ACCENT, 0);
-        lv_label_set_text(lbl, "Games");
+        lv_label_set_text(lbl, "Játékok");
         lv_obj_center(lbl);
     }
 
@@ -883,11 +883,11 @@ static void build_settings(void)
         lv_obj_add_event_cb(btn, usb_storage_row_click, LV_EVENT_CLICKED, NULL);
         lv_obj_t *lbl = lv_label_create(btn);
         lv_obj_set_style_text_color(lbl, COL_ACCENT, 0);
-        lv_label_set_text(lbl, "USB Storage");
+        lv_label_set_text(lbl, "USB tároló");
         lv_obj_center(lbl);
     }
     if (U.set_val_idle)      idle_label_refresh_locked();   // induló értékek
-    if (U.set_val_sleep)     lv_label_set_text(U.set_val_sleep, s_sleep_enabled ? "On" : "Off");
+    if (U.set_val_sleep)     lv_label_set_text(U.set_val_sleep, s_sleep_enabled ? "Be" : "Ki");
     if (U.set_val_album_end) album_end_label_refresh_locked();
 }
 
@@ -994,7 +994,7 @@ static void browser_rebuild_list(void)
     // playlist-sor(ok) töltik be ezt a szerepet (lent, valódi entry-ként).
     s_lib_show_playall = (m3u_count == 0 && any_file);
     if (s_lib_show_playall) {
-        lv_obj_t *pa = lv_list_add_button(U.lib_list, LV_SYMBOL_PLAY, "Play all");
+        lv_obj_t *pa = lv_list_add_button(U.lib_list, LV_SYMBOL_PLAY, "Mind lejátszása");
         lv_obj_set_style_border_width(pa, 0, LV_PART_MAIN);
         lv_obj_set_style_text_color(pa, COL_ACCENT, LV_PART_MAIN);
         lv_obj_set_user_data(pa, (void *)(intptr_t)-2);
@@ -1002,7 +1002,7 @@ static void browser_rebuild_list(void)
     }
 
     if (!U.br_entries || U.br_count == 0) {
-        lv_obj_t *empty = lv_list_add_text(U.lib_list, "(empty)");
+        lv_obj_t *empty = lv_list_add_text(U.lib_list, "(üres)");
         lv_obj_set_style_text_color(empty, COL_TEXT_DIM, 0);
         return;
     }
@@ -1015,7 +1015,7 @@ static void browser_rebuild_list(void)
             icon = LV_SYMBOL_PLAY;
             // Egyetlen playlist → beszédes "Play all" felirat; többnél a
             // fájlnevük különbözteti meg őket.
-            if (m3u_count == 1) text = "Play all";
+            if (m3u_count == 1) text = "Mind lejátszása";
         }
         lv_obj_t *btn = lv_list_add_button(U.lib_list, icon, text);
         lv_obj_set_style_border_width(btn, 0, LV_PART_MAIN);   // divider-csík ki
@@ -1048,7 +1048,7 @@ static void update_mini_playlist(void)
     if (!U.np_mini_list) return;
     lv_obj_clean(U.np_mini_list);
     if (!U.lib_tracks || U.lib_count == 0) {
-        lv_obj_t *empty = lv_list_add_text(U.np_mini_list, "(no tracks)");
+        lv_obj_t *empty = lv_list_add_text(U.np_mini_list, "(nincs dal)");
         lv_obj_set_style_text_color(empty, COL_TEXT_DIM, 0);
         return;
     }
@@ -1211,7 +1211,7 @@ void ui_show_no_track(void)
 {
     lvgl_port_lock(0);
     if (U.np_lbl_title)    lv_label_set_text(U.np_lbl_title, "...");
-    if (U.np_lbl_subtitle) lv_label_set_text(U.np_lbl_subtitle, "Válassz a Library-ből");
+    if (U.np_lbl_subtitle) lv_label_set_text(U.np_lbl_subtitle, "Válassz a Könyvtárból");
     if (U.np_img_cover) {
         // Track nélkül is a placeholder ül a cover-helyen (ne legyen üres folt).
         const lv_image_dsc_t *ph = cover_art_placeholder();
@@ -1411,7 +1411,7 @@ void ui_show_usb_mode_screen(bool have_card)
     lv_obj_t *title = lv_label_create(scr);
     lv_obj_set_style_text_font(title, &mp3_inter_24, 0);
     lv_obj_set_style_text_color(title, COL_ACCENT, 0);
-    lv_label_set_text(title, "USB Storage Mode");
+    lv_label_set_text(title, "USB tároló mód");
     lv_obj_align(title, LV_ALIGN_CENTER, 0, -78);
 
     lv_obj_t *sub = lv_label_create(scr);
@@ -1419,8 +1419,8 @@ void ui_show_usb_mode_screen(bool have_card)
     lv_obj_set_style_text_color(sub, COL_TEXT_DIM, 0);
     lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
     lv_label_set_text(sub, have_card
-        ? "Eject the drive on your computer before exit."
-        : "No SD card.");
+        ? "Kilépés előtt válaszd le a meghajtót a számítógépen."
+        : "Nincs SD kártya.");
     lv_obj_align(sub, LV_ALIGN_CENTER, 0, -34);
 
     // Exit gomb (vizuális — lásd a fenti blokk-kommentet)
@@ -1434,7 +1434,7 @@ void ui_show_usb_mode_screen(bool have_card)
     lv_obj_t *bl = lv_label_create(btn);
     lv_obj_set_style_text_font(bl, &mp3_inter_18, 0);
     lv_obj_set_style_text_color(bl, COL_BG, 0);
-    lv_label_set_text(bl, "Exit");
+    lv_label_set_text(bl, "Kilépés");
     lv_obj_center(bl);
 
     lv_screen_load(scr);
@@ -1550,7 +1550,7 @@ static void idle_label_refresh_locked(void)
 {
     if (!U.set_val_idle) return;
     char buf[16];
-    if (s_idle_timeout_s <= 0) snprintf(buf, sizeof(buf), "Never");
+    if (s_idle_timeout_s <= 0) snprintf(buf, sizeof(buf), "Soha");
     else                       snprintf(buf, sizeof(buf), "%d s", s_idle_timeout_s);
     lv_label_set_text(U.set_val_idle, buf);
 }
@@ -1615,7 +1615,7 @@ void ui_set_sleep_enabled(bool enabled)
 {
     s_sleep_enabled = enabled;
     lvgl_port_lock(0);
-    if (U.set_val_sleep) lv_label_set_text(U.set_val_sleep, enabled ? "On" : "Off");
+    if (U.set_val_sleep) lv_label_set_text(U.set_val_sleep, enabled ? "Be" : "Ki");
     lvgl_port_unlock();
 }
 
@@ -1631,7 +1631,7 @@ bool ui_toggle_sleep_enabled(void)
 static void album_end_label_refresh_locked(void)
 {
     if (!U.set_val_album_end) return;
-    static const char *labels[UI_ALBUM_END_COUNT] = { "Stop", "Repeat", "Next album" };
+    static const char *labels[UI_ALBUM_END_COUNT] = { "Leállítás", "Ismétlés", "Köv. album" };
     int m = s_album_end_mode;
     if (m < 0 || m >= UI_ALBUM_END_COUNT) m = UI_ALBUM_END_STOP;
     lv_label_set_text(U.set_val_album_end, labels[m]);

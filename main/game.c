@@ -165,7 +165,7 @@ void game_show_picker(void)
 
     P.scr = lv_obj_create(NULL);
     apply_dark_bg(P.scr);
-    build_header(P.scr, LV_SYMBOL_LEFT "  Back", picker_back_click, "GAMES");
+    build_header(P.scr, LV_SYMBOL_LEFT "  Vissza", picker_back_click, "JÁTÉKOK");
 
     lv_obj_t *list = lv_list_create(P.scr);
     lv_obj_set_size(list, 456, LCD_V_RES - HEADER_H - 24);
@@ -179,7 +179,7 @@ void game_show_picker(void)
 
     if (P.count == 0) {
         lv_obj_t *empty = lv_list_add_text(list,
-            "No games found.\nCopy .gb ROMs to " GAMES_DIR " on the SD card.");
+            "Nincs játék.\nMásolj .gb ROM-okat ide: " GAMES_DIR " az SD kártyán.");
         lv_obj_set_style_text_color(empty, COL_TEXT_DIM, 0);
     }
     for (int i = 0; i < P.count; i++) {
