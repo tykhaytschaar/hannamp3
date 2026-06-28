@@ -228,6 +228,74 @@ static void status_update(uint32_t pos, uint32_t dur, uint32_t sr, uint8_t ch)
     xSemaphoreGive(s_status_mux);
 }
 
+// MP3 frame-fejléc táblák (Layer III) a track-hossz becsléséhez.
+static const int MP3_BITRATE_V1[16] = {0,32,40,48,56,64,80,96,112,128,160,192,224,256,320,0};
+static const int MP3_BITRATE_V2[16] = {0,8,16,24,32,40,48,56,64,80,96,112,128,144,160,0};
+static const int MP3_SAMPRATE[4][3] = {
+    {11025, 12000,  8000},   // 0 = MPEG2.5
+    {0,         0,     0},   // 1 = reserved
+    {22050, 24000, 16000},   // 2 = MPEG2
+    {44100, 48000, 32000},   // 3 = MPEG1
+};
+
+// A track teljes hossza ms-ben az első MP3-frame fejlécéből — EGYSZER, a
+// lejátszás indításakor. VBR-nél a Xing/Info fejléc frame-számából pontos;
+// ennek hiányában (tiszta CBR) az első frame bitrátájából a hangadat méretére
+// vetítve. A fp pozícióját visszaállítja az első frame elejére, hogy a
+// dekódoló loop érintetlenül induljon. audio_bytes = a hangadat mérete
+// (fájlméret mínusz az átugrott ID3v2 tag).
+//
+// Korábban a dur_ms-t MINDEN dekódolt frame-nél a pillanatnyi frame
+// bitrátájából számoltuk újra — VBR-nél ez frame-enként más, ezért "ugrált"
+// a kijelzett hossz. Ez a becslés helyette egyszer fut le.
+static uint32_t mp3_duration_ms(FILE *fp, uint32_t audio_bytes)
+{
+    long start = ftell(fp);
+    uint8_t buf[1024];
+    int n = fread(buf, 1, sizeof(buf), fp);
+    fseek(fp, start, SEEK_SET);   // pozíció vissza, bármi is lesz az eredmény
+    if (n < 4) return 0;
+
+    // Frame-sync: 11 bit '1' (0xFF, 0xEx).
+    int i = 0;
+    for (; i + 4 <= n; i++) {
+        if (buf[i] == 0xFF && (buf[i+1] & 0xE0) == 0xE0) break;
+    }
+    if (i + 4 > n) return 0;
+
+    const uint8_t *h = buf + i;
+    int ver    = (h[1] >> 3) & 0x03;   // 0=2.5, 2=2, 3=1
+    int layer  = (h[1] >> 1) & 0x03;   // 1 = Layer III
+    int brIdx  = (h[2] >> 4) & 0x0F;
+    int srIdx  = (h[2] >> 2) & 0x03;
+    int chMode = (h[3] >> 6) & 0x03;   // 3 = mono
+    if (layer != 1 || ver == 1 || srIdx == 3 || brIdx == 0 || brIdx == 15) {
+        return 0;   // nem Layer III / ismeretlen → nincs becslés
+    }
+
+    bool v1          = (ver == 3);
+    int  samprate    = MP3_SAMPRATE[ver][srIdx];
+    int  bitrate     = v1 ? MP3_BITRATE_V1[brIdx] : MP3_BITRATE_V2[brIdx];  // kbps
+    int  spf         = v1 ? 1152 : 576;   // minta / frame, Layer III
+    if (samprate == 0) return 0;
+
+    // Xing/Info tag offsete a frame elejétől (verzió + mono/stereo szerint).
+    int xoff = v1 ? (chMode == 3 ? 21 : 36)
+                  : (chMode == 3 ? 13 : 21);
+    int x = i + xoff;
+    if (x + 12 <= n && (memcmp(buf + x, "Xing", 4) == 0 ||
+                        memcmp(buf + x, "Info", 4) == 0)) {
+        uint32_t flags = (buf[x+4]<<24)|(buf[x+5]<<16)|(buf[x+6]<<8)|buf[x+7];
+        if (flags & 0x0001) {   // a frame-szám mező jelen van
+            uint32_t frames = (buf[x+8]<<24)|(buf[x+9]<<16)|(buf[x+10]<<8)|buf[x+11];
+            return (uint32_t)((uint64_t)frames * spf * 1000 / samprate);
+        }
+    }
+
+    // Nincs használható VBR-fejléc → CBR: hangadat-méret / bitráta.
+    return bitrate ? (uint32_t)((uint64_t)audio_bytes * 8 / bitrate) : 0;
+}
+
 static void audio_task(void *arg)
 {
     HMP3Decoder hMP3 = MP3InitDecoder();
@@ -244,7 +312,7 @@ static void audio_task(void *arg)
     bool  playing = false;
     uint32_t total_samples = 0;
     uint32_t file_size = 0;
-    uint32_t bitrate_kbps = 128;
+    uint32_t track_dur_ms = 0;   // a track teljes hossza (CMD_PLAY-kor egyszer)
 
     audio_msg_t msg;
 
@@ -354,6 +422,22 @@ static void audio_task(void *arg)
                 in_bytes = 0;
                 in_ptr   = inbuf;
                 total_samples = 0;
+                // Track-hossz EGYSZER, a frame-fejlécből (Xing/Info → pontos,
+                // egyébként CBR-becslés). A fp itt az első hang-frame elején
+                // áll; a helper visszaállítja a pozíciót. WAV-nál a dur a
+                // data-chunk méretéből jön a loopban, ezért ott nem kell.
+                track_dur_ms = 0;
+                if (s_format == FMT_MP3) {
+                    // A helper SD-ről olvas (fread) — a kijelzővel közös SPI
+                    // buszon ez lock nélkül összeakadna egy LVGL flush-sal
+                    // (spi_hal_setup_trans assert). A parse-régió már unlockolt,
+                    // ezért itt külön zárunk a becslés idejére.
+                    uint32_t audio_bytes = file_size - (uint32_t)ftell(fp);
+                    ui_spi_lock();
+                    track_dur_ms = mp3_duration_ms(fp, audio_bytes);
+                    ui_spi_unlock();
+                    ESP_LOGI(TAG, "MP3 track hossz ~%lu ms", (unsigned long)track_dur_ms);
+                }
                 s_mp3_fail_streak = 0;
                 // I2S enable nem itt — setup_i2s() építi újra az első frame után.
                 playing = true;
@@ -509,8 +593,7 @@ static void audio_task(void *arg)
             cur_chans    = info.nChans;
             total_samples += samples / 2;
             pos_ms = (uint64_t)total_samples * 1000 / info.samprate;
-            if (info.bitrate > 0) bitrate_kbps = info.bitrate / 1000;
-            dur_ms = bitrate_kbps ? (file_size * 8 / bitrate_kbps) : 0;
+            dur_ms = track_dur_ms;   // egyszer, a CMD_PLAY-kor megállapított hossz
         }
 
         uint8_t vol = audio_get_volume();

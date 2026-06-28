@@ -13,7 +13,8 @@ typedef enum {
 typedef struct {
     audio_state_t state;
     uint32_t position_ms;     // becsült lejátszott pozíció
-    uint32_t duration_ms;     // becsült teljes hossz (CBR esetén pontos)
+    uint32_t duration_ms;     // teljes hossz (VBR: Xing/Info fejlécből pontos,
+                              // tiszta CBR: bitrátából; egyszer, indításkor)
     uint32_t sample_rate;
     uint8_t  channels;
     uint8_t  volume;          // 0..100
