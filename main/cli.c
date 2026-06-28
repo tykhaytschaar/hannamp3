@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 #include "driver/uart.h"
 #include "esp_log.h"
+#include "esp_system.h"   // esp_restart (##reset## parancs)
 
 #include "cli.h"
 #include "audio.h"
@@ -158,6 +159,11 @@ static void cli_dispatch(const char *cmd, const char *param)
         // Újraindulás USB MSC módba (SD a natív USB-n külső meghajtóként).
         ESP_LOGI(TAG, "usb -> reboot to USB MSC mode");
         usb_msc_request_reboot();   // sosem tér vissza
+    } else if (strcmp(cmd, "reset") == 0 || strcmp(cmd, "reboot") == 0) {
+        // Szoftveres újraindítás (pl. ha cold bootkor nem indult el rendesen).
+        ESP_LOGW(TAG, "reset -> esp_restart()");
+        vTaskDelay(pdMS_TO_TICKS(50));   // a log kiérjen az UART-ra
+        esp_restart();                   // sosem tér vissza
     } else {
         ESP_LOGW(TAG, "unknown command: '%s'", cmd);
     }
