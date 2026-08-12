@@ -15,7 +15,11 @@
 #   IDF_TARGET=esp32s3 tools/build.sh
 set -euo pipefail
 
-IDF_IMAGE="${IDF_IMAGE:-espressif/idf:v5.3.1}"
+# release-v5.3: az 5.3-as karbantartó ág gördülő image-e. Azért ez és nem a
+# v5.3.5 tag, mert a megosztott SPI-busz (SD + LCD) fagyását okozó
+# spi_bus_lock hibajavítás (b42734af, 2026-06) még egyik kiadott 5.3.x/5.4.x
+# tagben sincs benne. Ha megjelenik a v5.3.6, arra érdemes átpinnelni.
+IDF_IMAGE="${IDF_IMAGE:-espressif/idf:release-v5.3}"
 IDF_TARGET="${IDF_TARGET:-esp32s3}"
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
