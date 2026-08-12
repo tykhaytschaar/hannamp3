@@ -110,13 +110,15 @@ Modul jumperei:
   kötve (pull-up vagy jumper), azt a hidat el kell távolítani, hogy a GPIO
   tudja LOW-ra húzni
 
-## Akku-mérés (18650-hez)
+## Akku-mérés (104050 LiPo cella)
 
 | Komponens | ESP32-S3 GPIO | Megjegyzés |
 |---|---|---|
-| Akku ADC | GPIO 4 (ADC1 CH3) | 100k:100k osztón keresztül a 18650 + lábáról |
+| Akku ADC | GPIO 4 (ADC1 CH3) | 100k:100k osztón keresztül a cella + lábáról — bekötve |
 
-Jelenleg lebeg — random érték a UI-n. Funkcionálisan nem zavaró.
+Az osztó Thevenin-impedanciája 50k, ami sok az S3 ADC-jének (zajos,
+ugráló mérés) → **100 nF – 1 µF kerámia kondenzátor kell** a GPIO 4 és GND
+közé, az osztó középpontjánál.
 
 ## Foglalt lábak — ne használd
 

@@ -75,11 +75,29 @@ static void setup_button(int gpio, btn_event_t evt, bool repeat_on_hold)
     }
 }
 
+// OCV→SoC tábla, tipikus 1S LiPo nyugalmi görbe. A lineáris 3300–4200 skála a
+// 3.8 V-os platón durván félremér (ott van a kapacitás dereka); a pontok közt
+// lineárisan interpolálunk.
+static const struct { uint16_t mv; uint8_t pct; } OCV[] = {
+    {BAT_FULL_MV, 100}, {4110, 92}, {4020, 84}, {3950, 75}, {3870, 62},
+    {3840, 53}, {3800, 42}, {3770, 32}, {3730, 20}, {3690, 10}, {3610, 5},
+    {BAT_EMPTY_MV, 0},
+};
+
 uint8_t io_battery_percent_from_mv(uint16_t mv)
 {
-    if (mv >= BAT_FULL_MV)  return 100;
-    if (mv <= BAT_EMPTY_MV) return 0;
-    return (uint8_t)(((uint32_t)(mv - BAT_EMPTY_MV) * 100) / (BAT_FULL_MV - BAT_EMPTY_MV));
+    const int n = sizeof(OCV) / sizeof(OCV[0]);
+    if (mv >= OCV[0].mv)     return 100;
+    if (mv <= OCV[n-1].mv)   return 0;
+    for (int i = 1; i < n; i++) {
+        if (mv >= OCV[i].mv) {
+            uint32_t span = OCV[i-1].mv - OCV[i].mv;
+            uint32_t up   = mv - OCV[i].mv;
+            return OCV[i].pct +
+                   (uint8_t)(((uint32_t)(OCV[i-1].pct - OCV[i].pct) * up + span / 2) / span);
+        }
+    }
+    return 0;
 }
 
 uint16_t io_read_battery_mv(void)
@@ -106,10 +124,29 @@ uint16_t io_read_battery_mv(void)
 
 static void battery_task(void *arg)
 {
+    // Az S3 ADC belső zaja ±20–30 mV, amit a burst-átlag nem szűr ki (a 16
+    // minta µs-okon belül készül, a flicker-zaj korrelált). Ezért a méréseket
+    // időben is simítjuk: futó exponenciális átlag (EMA) az 5 s-onkénti
+    // mintákra. A kijelzett százalék ezen felül monoton: csak lefelé követi a
+    // mérést, mert a terhelés alatti beroskadás (~100 mV) valódi, de fel-le
+    // rángatná a kijelzést. Felfelé csak nagy tartós ugrás engedi (>=15%,
+    // az a töltő; a terhelés-elengedés visszapattanása csak ~8-10%).
+    float ema_mv   = 0;
+    int   disp_pct = -1;
     while (1) {
-        uint16_t mv  = io_read_battery_mv();
-        uint8_t  pct = io_battery_percent_from_mv(mv);
-        if (s_bat_cb) s_bat_cb(mv, pct);
+        uint16_t mv = io_read_battery_mv();
+        ema_mv = (ema_mv == 0) ? mv : ema_mv + 0.25f * ((float)mv - ema_mv);
+
+        uint16_t smooth_mv = (uint16_t)(ema_mv + 0.5f);
+        int pct = io_battery_percent_from_mv(smooth_mv);
+
+        int new_disp = disp_pct;
+        if (disp_pct < 0 || pct < disp_pct || pct - disp_pct >= 15)
+            new_disp = pct;
+        if (new_disp != disp_pct && s_bat_cb) {
+            s_bat_cb(smooth_mv, (uint8_t)new_disp);
+            disp_pct = new_disp;
+        }
         vTaskDelay(pdMS_TO_TICKS(5000));
     }
 }
