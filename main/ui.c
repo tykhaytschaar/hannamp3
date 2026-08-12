@@ -150,7 +150,6 @@ static ui_t U;
 // Forward declarations
 // -----------------------------------------------------------------------------
 static void ui_touch_init(void);
-static void header_gesture_cb(lv_event_t *e);
 static void build_overlay(void);
 static void build_now_playing(void);
 static void build_library(void);
@@ -365,35 +364,21 @@ static void ui_touch_init(void)
     }
     lvgl_port_unlock();
 
-    ESP_LOGI(TAG, "touch ready — bal-felső ~(0,0), jobb-alsó ~(480,320). Swipe a headerben: ←/→ képernyőváltás.");
+    ESP_LOGI(TAG, "touch ready — bal-felső ~(0,0), jobb-alsó ~(480,320). Oldalváltás: ←/→ nyilak a headerben.");
 }
 
 // -----------------------------------------------------------------------------
-// Swipe gesture a HEADER sávon → képernyőváltás. A gesztus-sáv a top-layeren
-// ül (build_overlay), így csak a headerből indított húzás vált képernyőt — a
-// screen-tartalmon (listák, cover stb.) a vízszintes húzás nem csinál semmit.
-// A hangerő-csúszka a sáv felett van, az ő drag-je nem ér ide.
-// LV_DIR_LEFT  : ujj balra húzott → következő képernyő
-// LV_DIR_RIGHT : ujj jobbra húzott → előző képernyő
+// Oldalváltó nyilak a headerben (az oldalnév két oldalán) → képernyőváltás.
+// A korábbi header-swipe-ot váltják: a gesztushoz túl szűk volt a sáv, a
+// nyilakra tapelni sokkal biztosabb. user_data: -1 = előző, +1 = következő.
 // -----------------------------------------------------------------------------
-static void header_gesture_cb(lv_event_t *e)
+static void nav_arrow_click(lv_event_t *e)
 {
-    (void)e;
-    lv_indev_t *indev = lv_indev_active();
-    if (!indev) return;
-    // Alvó kijelzőn a gesztus csak ébreszt (mint a gombok / tap-ok).
-    if (ui_user_activity()) {
-        lv_indev_wait_release(indev);
-        return;
-    }
-    lv_dir_t dir = lv_indev_get_gesture_dir(indev);
-    if (dir == LV_DIR_LEFT || dir == LV_DIR_RIGHT) {
-        if (dir == LV_DIR_LEFT) ui_next_screen();
-        else                    ui_prev_screen();
-        // A touch hátralévő részét (a felengedésig) eldobjuk — az ujj
-        // felengedése ne generáljon click-et sehol.
-        lv_indev_wait_release(indev);
-    }
+    // Alvó kijelzőn a tap csak ébreszt (mint a gombok / tap-sorok).
+    if (ui_user_activity()) return;
+    int dir = (int)(intptr_t)lv_obj_get_user_data(lv_event_get_target_obj(e));
+    if (dir > 0) ui_next_screen();
+    else         ui_prev_screen();
 }
 
 // -----------------------------------------------------------------------------
@@ -435,9 +420,8 @@ static void build_overlay(void)
     // Az overlay-en kattintásokat nem akarunk elnyelni — pl. a list scroll
     // alatta legyen elérhető.
     lv_obj_remove_flag(top, LV_OBJ_FLAG_CLICKABLE);
-    // A top layer NE scrollozzon: különben a swipe-sávon induló vízszintes
-    // húzást a scroll-engine fogná el (scroll_obj != NULL → az indev nem küld
-    // LV_EVENT_GESTURE-t). Ugyanaz az ok, mint a screeneknél (apply_screen_bg).
+    // A top layer NE scrollozzon — egy véletlen húzás ne mozdítsa el az
+    // overlay-t (ugyanaz az ok, mint a screeneknél, lásd apply_screen_bg).
     lv_obj_remove_flag(top, LV_OBJ_FLAG_SCROLLABLE);
 
     // Default font az overlay layerre — az itt létrehozott labelek (battery,
@@ -447,29 +431,28 @@ static void build_overlay(void)
     // ikonjaink (MP3_SYMBOL_LOCK / MP3_SYMBOL_UNLOCK) — négyzet jelenne meg.
     lv_obj_set_style_text_font(top, &mp3_inter_14, LV_PART_MAIN);
 
-    // Swipe-sáv: a képernyőváltó gesztus CSAK a headerből indítva érvényes.
-    // Átlátszó, kattintható sáv a top-layeren, ELSŐKÉNT létrehozva (legalul
-    // a z-sorrendben): a press ide esik (a nem-klikkelhető labelek átengedik),
-    // a később létrehozott hangerő-csúszka viszont felette nyeri a hit-tesztet.
-    {
-        lv_obj_t *strip = lv_obj_create(top);
-        lv_obj_remove_style_all(strip);
-        lv_obj_set_size(strip, LCD_H_RES, 30);
-        lv_obj_set_pos(strip, 0, 0);
-        lv_obj_add_flag(strip, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_remove_flag(strip, LV_OBJ_FLAG_SCROLLABLE);
-        // GESTURE_BUBBLE NÉLKÜL: az indev a gesztust a bubble-lánc TETEJÉNEK
-        // küldi (itt a top layer lenne) — a flag levételével a sávon áll meg
-        // a lánc, így a cb ténylegesen itt sül el.
-        lv_obj_remove_flag(strip, LV_OBJ_FLAG_GESTURE_BUBBLE);
-        lv_obj_add_event_cb(strip, header_gesture_cb, LV_EVENT_GESTURE, NULL);
-    }
-
     // Oldalnév középen.
     U.ovr_screen_chip = lv_label_create(top);
     lv_obj_set_style_text_color(U.ovr_screen_chip, COL_ACCENT, LV_PART_MAIN);
     lv_label_set_text(U.ovr_screen_chip, "LEJÁTSZÁS");
     lv_obj_align(U.ovr_screen_chip, LV_ALIGN_TOP_MID, 0, 6);
+
+    // Oldalváltó nyilak az oldalnév két oldalán (a swipe-ot váltják). Fix
+    // offsetre a képernyő-középtől, nem a chiphez igazítva: az oldalnév
+    // hossza váltáskor változik ("KÖNYVTÁR" ↔ "BEÁLLÍTÁSOK"), a nyilak
+    // maradjanak helyben. ±78 px: a leghosszabb név ("BEÁLLÍTÁSOK") mellett
+    // is marad rés. A glyph kicsi — kiterjesztett találati zóna kell, hogy
+    // ujjal kényelmes legyen; a zónák a fix offset mellett sem érnek össze.
+    for (int dir = -1; dir <= 1; dir += 2) {
+        lv_obj_t *arrow = lv_label_create(top);
+        lv_obj_set_style_text_color(arrow, COL_ACCENT, LV_PART_MAIN);
+        lv_label_set_text(arrow, dir < 0 ? LV_SYMBOL_LEFT : LV_SYMBOL_RIGHT);
+        lv_obj_align(arrow, LV_ALIGN_TOP_MID, dir * 78, 6);
+        lv_obj_add_flag(arrow, LV_OBJ_FLAG_CLICKABLE);
+        lv_obj_set_ext_click_area(arrow, 14);
+        lv_obj_set_user_data(arrow, (void *)(intptr_t)dir);
+        lv_obj_add_event_cb(arrow, nav_arrow_click, LV_EVENT_CLICKED, NULL);
+    }
 
     U.ovr_battery = lv_label_create(top);
     lv_obj_set_style_text_color(U.ovr_battery, COL_TEXT_DIM, LV_PART_MAIN);
