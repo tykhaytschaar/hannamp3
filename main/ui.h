@@ -112,6 +112,11 @@ void ui_browser_set_cursor(int cursor);
 bool ui_user_activity(void);
 void ui_idle_check(void);
 
+// A legutóbbi felhasználói aktivitás (gomb/CLI/touch) óta eltelt idő ms-ben.
+// A deep sleep döntés használja (player_task): gombozás/tapizás közben az
+// eszköz akkor sem alhat el, ha épp nincs lejátszás.
+int64_t ui_ms_since_last_activity(void);
+
 // Game mode: az idle/display-off számláló tiltása játék alatt — a játékos
 // nem feltétlenül generál gomb/touch eseményt elég sűrűn, mégsem alhat el a
 // kijelző. Feloldáskor az idle-számláló nulláról indul. (game.c hívja.)

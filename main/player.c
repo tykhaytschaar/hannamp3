@@ -595,13 +595,18 @@ static void player_task(void *arg)
         last_state = st.state;
         ui_idle_check();   // tétlenség → DISPOFF + BL off
 
-        // Sleep döntés: ha enabled, és nincs lejátszás SLEEP_IDLE_MS óta.
-        // Playing alatt a timer folyamatosan resettelődik (sose alszik el).
-        // A futó játék is aktivitás — játék közben nem mehetünk deep sleep-be.
+        // Sleep döntés: ha enabled, és SLEEP_IDLE_MS óta nincs SE lejátszás,
+        // SE felhasználói aktivitás (gomb/CLI/touch — ui_ms_since_last_activity).
+        // Playing alatt a timer folyamatosan resettelődik (sose alszik el),
+        // és a futó játék is aktivitás. A user-aktivitás nélkül böngészés
+        // közben is elaludt az eszköz (fel-le gombozás a Könyvtárban) — a
+        // gomb/touch a kijelző-idle-t nullázta, ezt a timert nem.
         if (st.state == AUDIO_STATE_PLAYING || gbmode_is_active()) {
             not_playing_since_us = esp_timer_get_time();
         } else if (ui_get_sleep_enabled()) {
             int64_t idle_ms = (esp_timer_get_time() - not_playing_since_us) / 1000;
+            int64_t user_ms = ui_ms_since_last_activity();
+            if (user_ms < idle_ms) idle_ms = user_ms;
             if (idle_ms >= SLEEP_IDLE_MS) {
                 enter_deep_sleep();   // nem tér vissza
             }

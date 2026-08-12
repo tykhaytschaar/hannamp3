@@ -1523,19 +1523,27 @@ void ui_force_wake_pending(void)
     s_disp_off = true;
 }
 
-void ui_idle_check(void)
+// A legutóbbi felhasználói aktivitás óta eltelt idő ms-ben. A gomb/CLI
+// aktivitás (s_last_activity_us) ÉS a touch közül a frissebb számít — a
+// touchot az LVGL tartja nyilván (lv_display_get_inactive_time), így az
+// érintés (slider, tap, scroll) is aktivitás. A kijelző-idle (ui_idle_check)
+// és a deep sleep döntés (player_task) is erre épül.
+int64_t ui_ms_since_last_activity(void)
 {
-    if (s_idle_inhibit) return;
-    if (s_disp_off || !s_panel) return;
-    if (s_idle_timeout_s <= 0) return;        // never
-    // A gomb/CLI aktivitás (s_last_activity_us) ÉS a touch közül a frissebb
-    // számít — a touchot az LVGL tartja nyilván (lv_display_get_inactive_time),
-    // így az érintés (slider, tap, scroll) is ébren tartja a kijelzőt.
     int64_t elapsed_ms = (esp_timer_get_time() - s_last_activity_us) / 1000;
     if (s_disp) {
         int64_t touch_ms = (int64_t)lv_display_get_inactive_time(s_disp);
         if (touch_ms < elapsed_ms) elapsed_ms = touch_ms;
     }
+    return elapsed_ms;
+}
+
+void ui_idle_check(void)
+{
+    if (s_idle_inhibit) return;
+    if (s_disp_off || !s_panel) return;
+    if (s_idle_timeout_s <= 0) return;        // never
+    int64_t elapsed_ms = ui_ms_since_last_activity();
     if (elapsed_ms >= (int64_t)s_idle_timeout_s * 1000) {
         lvgl_port_lock(0);
         esp_lcd_panel_disp_on_off(s_panel, false);
