@@ -2,7 +2,11 @@
 
 Hordozható MP3/WAV-lejátszó ESP32-S3-on: ST7796 TFT + FT6336 touch, PCM5102A
 DAC (I2S), SD-kártya, 8 gomb, 18650 akku. LVGL 9 UI, magyar feliratokkal.
-Mellette Game Boy emulátor (peanut_gb) a `/sdcard/games` ROM-okra.
+Mellette Game Boy / Game Boy Color emulátor (vendorolt Walnut-CGB,
+`main/walnut_cgb.h`) a `/sdcard/games` ROM-okra: battery-save (`.sav`) és
+save state (`.state`) az SD-n a ROM mellett; render-mód és mag futás közben
+váltható (`##gbfs##` / `##gbcore##` CLI). A `.state` build-függő (ELF-SHA),
+firmware-frissítés érvényteleníti.
 
 ## Build és flash
 
