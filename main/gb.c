@@ -81,6 +81,9 @@ static struct {
     struct gb_s     *gb;           // emulátor-állapot (PSRAM; CGB-vel ~70 KB)
     uint8_t         *rom;          // teljes ROM (PSRAM)
     uint8_t         *cart_ram;     // cart RAM, ha a játéknak van (PSRAM)
+    size_t           save_size;    // cart RAM mérete (0 = nincs mentés)
+    char             save_path[MAX_PATH_LEN];   // <rom>.sav az SD-n
+    volatile bool    cart_dirty;   // írt-e a játék a cart RAM-ba
     uint8_t         *fb[2];        // 320×288 RGB565 dupla buffer (PSRAM)
     volatile int     front;        // a kész, megjeleníthető buffer indexe
     int              back;         // amibe a scanline-ok íródnak
@@ -161,7 +164,10 @@ static void cb_cart_ram_write(struct gb_s *gb, const uint_fast32_t addr,
                               const uint8_t val)
 {
     (void)gb;
-    if (G.cart_ram) G.cart_ram[addr] = val;
+    if (G.cart_ram) {
+        G.cart_ram[addr] = val;
+        G.cart_dirty = true;   // kilépéskor van mit menteni
+    }
 }
 
 static void cb_error(struct gb_s *gb, const enum gb_error_e err,
@@ -255,6 +261,8 @@ static void poll_input(void)
 // -----------------------------------------------------------------------------
 // Emulációs task (1-es mag, PSRAM-stack — flash-műveletet nem végez)
 // -----------------------------------------------------------------------------
+static void write_save(void);   // battery-save blokk lentebb
+
 static void gb_task(void *arg)
 {
     (void)arg;
@@ -343,6 +351,9 @@ static void gb_task(void *arg)
             stat_emu_us = 0;
         }
     }
+    // Battery-save kiírása MÉG a task-done jelzés előtt: a do_exit csak
+    // ezután szabadítja fel a cart RAM-ot (use-after-free ellen).
+    write_save();
     G.task_done = true;
     vTaskDelete(NULL);
 }
@@ -566,6 +577,147 @@ static uint8_t *load_rom(const char *path, size_t *out_size)
     return rom;
 }
 
+// -----------------------------------------------------------------------------
+// Battery-save (.sav) perzisztencia — cart RAM + (MBC3) RTC az SD-n, a ROM
+// mellett. Formátum: nyers cart RAM, MBC3-nál 48 bájtos VBA/retro-go-
+// kompatibilis RTC-blokkal a végén (5×int32 LE aktuális + 5×int32 LE
+// latchelt regiszter + 8 bájt unix-idő — valós óránk nincs, az idő 0).
+// Minden SD-elérés ui_spi_lock alatt (flush-kizárás, lásd a fájl tetejét).
+// -----------------------------------------------------------------------------
+#define GB_SAV_RTC_LEN 48
+
+static void save_path_from_rom(const char *rom_path)
+{
+    strlcpy(G.save_path, rom_path, sizeof(G.save_path));
+    char *dot   = strrchr(G.save_path, '.');
+    char *slash = strrchr(G.save_path, '/');
+    if (dot && (!slash || dot > slash)) *dot = 0;
+    strlcat(G.save_path, ".sav", sizeof(G.save_path));
+}
+
+// Betöltés induláskor. Hiányzó fájl = friss játék (nem hiba). Hibás méretű/
+// olvashatatlan mentésnél nullázott RAM-mal indulunk, jelzéssel.
+static void load_save(void)
+{
+    if (!G.cart_ram || !G.save_size) return;
+
+    ui_spi_lock();
+    FILE *f = fopen(G.save_path, "rb");
+    ui_spi_unlock();
+    if (!f) return;
+
+    ui_spi_lock();
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    ui_spi_unlock();
+
+    size_t got = 0;
+    while (got < G.save_size) {
+        size_t chunk = G.save_size - got;
+        if (chunk > 65536) chunk = 65536;
+        ui_spi_lock();
+        size_t n = fread(G.cart_ram + got, 1, chunk, f);
+        ui_spi_unlock();
+        if (n == 0) break;
+        got += n;
+    }
+
+    if (got != G.save_size) {
+        ESP_LOGW(TAG, "sérült mentés (%u/%u B) — új játék: %s",
+                 (unsigned)got, (unsigned)G.save_size, G.save_path);
+        memset(G.cart_ram, 0, G.save_size);
+        ui_show_toast("Sérült mentésfájl — új játék indul");
+    } else if (G.gb->mbc == 3 && fsize >= (long)(G.save_size + 44)) {
+        // RTC-blokk (44 = régi VBA 4 bájtos idővel, 48 = mai formátum).
+        uint8_t rtc[GB_SAV_RTC_LEN] = {0};
+        size_t rtc_len = (size_t)fsize - G.save_size;
+        if (rtc_len > sizeof(rtc)) rtc_len = sizeof(rtc);
+        ui_spi_lock();
+        size_t n = fread(rtc, 1, rtc_len, f);
+        ui_spi_unlock();
+        if (n >= 40) {
+            for (int i = 0; i < 5; i++) {
+                G.gb->rtc_real.bytes[i]    = rtc[i * 4];
+                G.gb->rtc_latched.bytes[i] = rtc[20 + i * 4];
+            }
+        }
+    }
+
+    ui_spi_lock();
+    fclose(f);
+    ui_spi_unlock();
+    ESP_LOGI(TAG, "mentés betöltve: %s (%u B)", G.save_path,
+             (unsigned)G.save_size);
+}
+
+// Mentés kilépéskor — a gb_task kontextusában (core 1), NEM az LVGL-oldali
+// do_exit-ben, hogy az írás ne fogja a core 0-t. Atomikus: előbb .tmp,
+// aztán rename — áramszünet/hiba esetén a régi mentés érintetlen marad.
+static void write_save(void)
+{
+    if (!G.cart_dirty || !G.cart_ram || !G.save_size) return;
+
+    char tmp[MAX_PATH_LEN];
+    int len = snprintf(tmp, sizeof(tmp), "%s.tmp", G.save_path);
+    if (len < 0 || len >= (int)sizeof(tmp)) return;   // túl hosszú út
+
+    ui_spi_lock();
+    FILE *f = fopen(tmp, "wb");
+    ui_spi_unlock();
+    if (!f) {
+        ESP_LOGE(TAG, "mentés: fopen sikertelen: %s", tmp);
+        ui_show_toast("Mentés írása sikertelen (SD)");
+        return;
+    }
+
+    bool ok = true;
+    size_t off = 0;
+    while (off < G.save_size) {
+        size_t chunk = G.save_size - off;
+        if (chunk > 65536) chunk = 65536;
+        ui_spi_lock();
+        size_t n = fwrite(G.cart_ram + off, 1, chunk, f);
+        ui_spi_unlock();
+        if (n != chunk) { ok = false; break; }
+        off += n;
+    }
+    if (ok && G.gb->mbc == 3) {
+        uint8_t rtc[GB_SAV_RTC_LEN] = {0};
+        for (int i = 0; i < 5; i++) {
+            rtc[i * 4]      = G.gb->rtc_real.bytes[i];
+            rtc[20 + i * 4] = G.gb->rtc_latched.bytes[i];
+        }
+        ui_spi_lock();
+        ok = fwrite(rtc, 1, sizeof(rtc), f) == sizeof(rtc);
+        ui_spi_unlock();
+    }
+    ui_spi_lock();
+    fclose(f);
+    ui_spi_unlock();
+
+    if (!ok) {
+        ui_spi_lock();
+        remove(tmp);
+        ui_spi_unlock();
+        ESP_LOGE(TAG, "mentés: írás sikertelen: %s", tmp);
+        ui_show_toast("Mentés írása sikertelen (SD)");
+        return;
+    }
+
+    ui_spi_lock();
+    remove(G.save_path);              // FAT-on a rename nem ír felül
+    int r = rename(tmp, G.save_path);
+    ui_spi_unlock();
+    if (r != 0) {
+        ESP_LOGE(TAG, "mentés: rename sikertelen: %s", G.save_path);
+        ui_show_toast("Mentés írása sikertelen (SD)");
+        return;
+    }
+    ESP_LOGI(TAG, "mentés kiírva: %s (%u B)", G.save_path,
+             (unsigned)G.save_size);
+}
+
 bool gbmode_start(const char *rom_path, gbmode_exit_cb_t on_exit)
 {
     if (G.active) return false;
@@ -600,12 +752,16 @@ bool gbmode_start(const char *rom_path, gbmode_exit_cb_t on_exit)
 
     size_t save_size = 0;
     if (gb_get_save_size_s(G.gb, &save_size) != 0) save_size = 0;
+    G.save_size  = save_size;
+    G.cart_dirty = false;
     if (save_size > 0) {
         G.cart_ram = heap_caps_calloc(1, save_size, MALLOC_CAP_SPIRAM);
         if (!G.cart_ram) {
             free_buffers();
             return false;
         }
+        save_path_from_rom(rom_path);
+        load_save();
     }
     gb_init_lcd(G.gb, cb_lcd_line);
 
