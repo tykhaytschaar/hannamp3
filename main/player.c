@@ -18,6 +18,7 @@
 #include "esp_timer.h"
 #include "esp_sleep.h"
 #include "driver/gpio.h"
+#include "driver/rtc_io.h"
 
 static const char *TAG = "player";
 
@@ -486,6 +487,13 @@ static void enter_deep_sleep(void)
     gpio_hold_en(PIN_BL);
     gpio_deep_sleep_hold_en();
 
+    // KRITIKUS: deep sleepben a digitális pull-up elenged — RTC pull-up
+    // nélkül a GPIO 17 lebeg, az ANY_LOW wake azonnal (és folyamatosan)
+    // ébreszt → ~1 Hz-es wake-loop, folyamatos fogyasztással. Az RTC
+    // perifériát bekapcsolva kell tartani, hogy a pull-up alvás alatt éljen.
+    rtc_gpio_pullup_en(PIN_BTN_UP);
+    rtc_gpio_pulldown_dis(PIN_BTN_UP);
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
     esp_sleep_enable_ext1_wakeup_io(1ULL << PIN_BTN_UP, ESP_EXT1_WAKEUP_ANY_LOW);
     esp_deep_sleep_start();
 }
