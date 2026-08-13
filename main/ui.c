@@ -1208,6 +1208,45 @@ void ui_show_no_track(void)
     lvgl_port_unlock();
 }
 
+// Rövid, magától eltűnő hibajelzés/üzenet a képernyő alján (lv_layer_top).
+// Újabb toast a régit lecseréli. A top layeren ül, tehát csak akkor látszik,
+// amikor az overlay is (játék-képernyőn a top layer rejtett — oda nem való).
+static lv_obj_t *s_toast;
+
+static void toast_expire_cb(lv_timer_t *t)
+{
+    (void)t;   // repeat_count=1 → a timer a lefutás után magától törlődik
+    if (s_toast) {
+        lv_obj_delete(s_toast);
+        s_toast = NULL;
+    }
+}
+
+void ui_show_toast(const char *msg)
+{
+    lvgl_port_lock(0);
+    if (s_toast) {
+        lv_obj_delete(s_toast);
+        s_toast = NULL;
+    }
+    lv_obj_t *p = lv_obj_create(lv_layer_top());
+    lv_obj_remove_style_all(p);
+    lv_obj_set_style_bg_color(p, COL_BG_PANEL_2, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(p, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(p, 8, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(p, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(p, 10, LV_PART_MAIN);
+    lv_obj_set_size(p, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_t *lbl = lv_label_create(p);
+    lv_obj_set_style_text_color(lbl, COL_TEXT, LV_PART_MAIN);
+    lv_label_set_text(lbl, msg);
+    lv_obj_align(p, LV_ALIGN_BOTTOM_MID, 0, -16);
+    s_toast = p;
+    lv_timer_t *t = lv_timer_create(toast_expire_cb, 2500, NULL);
+    lv_timer_set_repeat_count(t, 1);
+    lvgl_port_unlock();
+}
+
 void ui_set_state(audio_state_t st)
 {
     lvgl_port_lock(0);

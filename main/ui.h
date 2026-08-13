@@ -37,6 +37,7 @@ void ui_display_ready(void);
 // majd elenged.
 void ui_show_track(const track_t *tr);   // cím + álbumkép töltés
 void ui_show_no_track(void);
+void ui_show_toast(const char *msg);   // rövid, magától eltűnő üzenet alul
 
 // A Now Playing állapot-ikont állítja: PLAYING → ▶, PAUSED → ⏸, STOPPED/FINISHED → ■
 #include "audio.h"

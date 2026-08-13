@@ -609,7 +609,8 @@ int sd_list_dir(const char *path, dir_entry_t *out, int max_entries)
         bool is_dir = (e->d_type == DT_DIR);
         bool is_m3u = !is_dir && (has_ext(e->d_name, ".m3u")
                                || has_ext(e->d_name, ".m3u8"));
-        bool is_gb  = !is_dir && has_ext(e->d_name, ".gb");
+        bool is_gb  = !is_dir && (has_ext(e->d_name, ".gb")
+                               || has_ext(e->d_name, ".gbc"));
         if (!is_dir && !is_m3u && !is_gb && !has_ext(e->d_name, ".mp3")
                     && !has_ext(e->d_name, ".wav")) continue;
         strncpy(out[n].name, e->d_name, sizeof(out[n].name) - 1);

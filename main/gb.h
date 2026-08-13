@@ -4,9 +4,11 @@
 
 #include "io.h"   // btn_event_t
 
-// Game Boy (DMG) mód — Peanut-GB emulátormag (main/peanut_gb.h, MIT) +
-// LVGL megjelenítés. A .gb ROM-okat a player_launch_game() irányítja ide
-// (kiterjesztés szerint); a picker/Settings-integráció közös a CHIP-8-cal.
+// Game Boy / Game Boy Color mód — Walnut-CGB emulátormag
+// (main/walnut_cgb.h, MIT) + LVGL megjelenítés. A .gb/.gbc ROM-okat a
+// player_launch_game() irányítja ide (kiterjesztés szerint); a
+// picker/Settings-integráció közös a CHIP-8-cal. CGB-kompatibilis .gb
+// (header 0x143 bit7) automatikusan színesben fut.
 //
 // Architektúra: az emuláció saját FreeRTOS taskban fut az 1-es magon
 // (az LVGL a 0-son), valós idejű ~59,7 fps-sel, PSRAM-beli dupla
@@ -30,3 +32,8 @@ void gbmode_request_exit(void);
 // Gomb-esemény → rövid szimulált tap a GB joypadon (CLI-injektáláshoz,
 // amíg a B/Start/Select nincs bekötve). Nem game-gomb esemény → no-op.
 void gbmode_handle_button(btn_event_t evt);
+
+// Hangolási A/B-kapcsolók (CLI: ##gbcore## / ##gbfs##) — hatásuk az
+// fps/emu-logban mérhető; játék közben, flash nélkül válthatók.
+void gbmode_toggle_core(void);         // dualfetch ↔ eredeti 8 bites mag
+void gbmode_cycle_render_mode(void);   // adaptív → teljes → frameskip → interlace
