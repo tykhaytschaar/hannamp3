@@ -1197,9 +1197,10 @@ void ui_show_no_track(void)
     lvgl_port_unlock();
 }
 
-// Rövid, magától eltűnő hibajelzés/üzenet a képernyő alján (lv_layer_top).
-// Újabb toast a régit lecseréli. A top layeren ül, tehát csak akkor látszik,
-// amikor az overlay is (játék-képernyőn a top layer rejtett — oda nem való).
+// Rövid, magától eltűnő hibajelzés/üzenet a képernyő alján. A SYS layeren ül
+// (nem a top layeren!): azt a játékmód/picker sem rejti el, így a save
+// state visszajelzései játék közben is látszanak. Újabb toast a régit
+// lecseréli.
 static lv_obj_t *s_toast;
 
 static void toast_expire_cb(lv_timer_t *t)
@@ -1218,8 +1219,11 @@ void ui_show_toast(const char *msg)
         lv_obj_delete(s_toast);
         s_toast = NULL;
     }
-    lv_obj_t *p = lv_obj_create(lv_layer_top());
+    lv_obj_t *p = lv_obj_create(lv_layer_sys());
     lv_obj_remove_style_all(p);
+    // A sys layer nem örökli a top layerre állított fontot — explicit kell,
+    // különben a beépített montserratból hiányoznak az ékezetes betűk.
+    lv_obj_set_style_text_font(p, &mp3_inter_14, LV_PART_MAIN);
     lv_obj_set_style_bg_color(p, COL_BG_PANEL_2, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(p, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_radius(p, 8, LV_PART_MAIN);

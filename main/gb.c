@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "esp_app_desc.h"   // esp_app_get_elf_sha256 (save state build-azonosító)
 
 #include "lvgl.h"
 #include "esp_lvgl_port.h"
@@ -83,7 +84,9 @@ static struct {
     uint8_t         *cart_ram;     // cart RAM, ha a játéknak van (PSRAM)
     size_t           save_size;    // cart RAM mérete (0 = nincs mentés)
     char             save_path[MAX_PATH_LEN];   // <rom>.sav az SD-n
+    char             state_path[MAX_PATH_LEN];  // <rom>.state az SD-n
     volatile bool    cart_dirty;   // írt-e a játék a cart RAM-ba
+    volatile int     state_req;    // 1 = mentés, 2 = betöltés (gb_task hajtja végre)
     uint8_t         *fb[2];        // 320×288 RGB565 dupla buffer (PSRAM)
     volatile int     front;        // a kész, megjeleníthető buffer indexe
     int              back;         // amibe a scanline-ok íródnak
@@ -262,6 +265,8 @@ static void poll_input(void)
 // Emulációs task (1-es mag, PSRAM-stack — flash-műveletet nem végez)
 // -----------------------------------------------------------------------------
 static void write_save(void);   // battery-save blokk lentebb
+static void state_save(void);   // save state blokk lentebb
+static void state_load(void);
 
 static void gb_task(void *arg)
 {
@@ -274,6 +279,15 @@ static void gb_task(void *arg)
     int64_t ema_us = 0;        // renderelt frame-ek emu-idejének EMA-ja
     bool    adapt_skip = false;
     while (!G.exit_req) {
+        // Save state kérés (touch-gombról) — frame-határon, ebben a taskban:
+        // a gb_s struct kiírás/visszatöltés közben garantáltan nem mozog.
+        if (G.state_req) {
+            int req = G.state_req;
+            G.state_req = 0;
+            if (req == 1) state_save();
+            else          state_load();
+            next = esp_timer_get_time();   // SD-művelet után friss pacing
+        }
         poll_input();
         int rm = G.render_mode;
         bool fs;
@@ -421,6 +435,13 @@ static void exit_btn_click(lv_event_t *e)
     gbmode_request_exit();   // a lebontást a present-timer intézi (task_done)
 }
 
+// Save state gomb: csak kérést állít be — a tényleges SD-műveletet a
+// gb_task végzi frame-határon (LVGL-kontextusból tilos ide SD-t írni).
+static void state_btn_click(lv_event_t *e)
+{
+    G.state_req = (int)(uintptr_t)lv_event_get_user_data(e);
+}
+
 // Touch-gomb (jobb oldalsáv): nyomva tartásig tartó joypad-bit.
 static void touch_btn_event(lv_event_t *e)
 {
@@ -487,6 +508,28 @@ static void build_screen(void)
     lv_obj_set_style_text_color(xl, COL_ACCENT, 0);
     lv_label_set_text(xl, LV_SYMBOL_LEFT " Kilépés");
     lv_obj_center(xl);
+
+    // Save state gombok: pillanatkép mentése/betöltése (checkpoint —
+    // mentés nélküli játékoknál is). A művelet a gb_task-ban fut.
+    static const struct { const char *txt; int req; int y; } SBTN[] = {
+        { "Mentés",   1, 78 },
+        { "Betöltés", 2, 134 },
+    };
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *btn = lv_button_create(left);
+        lv_obj_set_size(btn, GB_PANEL_W - 12, 48);
+        lv_obj_set_pos(btn, 6, SBTN[i].y);
+        lv_obj_set_style_bg_color(btn, COL_BG_PANEL_2, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(btn, 8, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(btn, 0, LV_PART_MAIN);
+        lv_obj_add_event_cb(btn, state_btn_click, LV_EVENT_CLICKED,
+                            (void *)(uintptr_t)SBTN[i].req);
+        lv_obj_t *bl = lv_label_create(btn);
+        lv_obj_set_style_text_color(bl, COL_TEXT_DIM, 0);
+        lv_label_set_text(bl, SBTN[i].txt);
+        lv_obj_center(bl);
+    }
 
     // Jobb sáv: Start / Select touch-gombok — ezeknek nincs dedikált
     // fizikai gombjuk (az X/Y gomb ütné őket, de touchról kényelmesebb).
@@ -586,13 +629,15 @@ static uint8_t *load_rom(const char *path, size_t *out_size)
 // -----------------------------------------------------------------------------
 #define GB_SAV_RTC_LEN 48
 
-static void save_path_from_rom(const char *rom_path)
+// <ROM útvonal> kiterjesztése lecserélve (.sav / .state kísérőfájlok).
+static void sidecar_path(char *dst, size_t n, const char *rom_path,
+                         const char *ext)
 {
-    strlcpy(G.save_path, rom_path, sizeof(G.save_path));
-    char *dot   = strrchr(G.save_path, '.');
-    char *slash = strrchr(G.save_path, '/');
+    strlcpy(dst, rom_path, n);
+    char *dot   = strrchr(dst, '.');
+    char *slash = strrchr(dst, '/');
     if (dot && (!slash || dot > slash)) *dot = 0;
-    strlcat(G.save_path, ".sav", sizeof(G.save_path));
+    strlcat(dst, ext, n);
 }
 
 // Betöltés induláskor. Hiányzó fájl = friss játék (nem hiba). Hibás méretű/
@@ -718,6 +763,156 @@ static void write_save(void)
              (unsigned)G.save_size);
 }
 
+// -----------------------------------------------------------------------------
+// Save state (.state) — a TELJES emulátor-állapot (gb_s struct + cart RAM)
+// pillanatképe, mag-specifikus nyers formátum. Más emulátorba NEM vihető át
+// (szemben a .sav-val), és csak az AZONOS firmware-builddel tölthető vissza —
+// a fejlécbeli ELF-hash ezt kényszeríti ki. A műveletet a gb_task futtatja
+// frame-határon (state_req), így a struct sosem mozog kiírás közben.
+// -----------------------------------------------------------------------------
+typedef struct {
+    char     magic[4];       // "WGBS"
+    uint32_t version;        // formátum-verzió
+    char     elf_sha[17];    // esp_app_get_elf_sha256() — build-azonosító
+    uint8_t  pad[3];
+    uint32_t gb_size;        // sizeof(struct gb_s) az író buildben
+    uint32_t ram_size;       // cart RAM mérete
+} gb_state_hdr_t;
+#define GB_STATE_MAGIC   "WGBS"
+#define GB_STATE_VERSION 1
+
+// A struct-dumpban a callback-pointerek az ÍRÓ build címeit tartalmazzák —
+// betöltés után kötelező frissre kötni mindet (azonos buildnél elvben
+// azonosak, de ez így minden kétséget kizár).
+static void rebind_gb_callbacks(void)
+{
+    G.gb->gb_rom_read        = cb_rom_read;
+    G.gb->gb_rom_read_16bit  = cb_rom_read16;
+    G.gb->gb_rom_read_32bit  = cb_rom_read32;
+    G.gb->gb_cart_ram_read   = cb_cart_ram_read;
+    G.gb->gb_cart_ram_write  = cb_cart_ram_write;
+    G.gb->gb_error           = cb_error;
+    G.gb->gb_serial_tx       = NULL;
+    G.gb->gb_serial_rx       = NULL;
+    G.gb->gb_bootrom_read    = NULL;
+    G.gb->direct.priv        = NULL;
+    G.gb->display.lcd_draw_line = cb_lcd_line;
+}
+
+// Lockolt, chunkolt fread/fwrite — a .sav-nál bevált minta.
+static bool locked_io(FILE *f, uint8_t *buf, size_t len, bool write)
+{
+    size_t done = 0;
+    while (done < len) {
+        size_t chunk = len - done;
+        if (chunk > 65536) chunk = 65536;
+        ui_spi_lock();
+        size_t n = write ? fwrite(buf + done, 1, chunk, f)
+                         : fread(buf + done, 1, chunk, f);
+        ui_spi_unlock();
+        if (n != chunk && !write) { done += n; break; }
+        if (n != chunk) return false;
+        done += n;
+    }
+    return done == len;
+}
+
+static void state_save(void)
+{
+    char tmp[MAX_PATH_LEN];
+    int len = snprintf(tmp, sizeof(tmp), "%s.tmp", G.state_path);
+    if (len < 0 || len >= (int)sizeof(tmp)) return;
+
+    gb_state_hdr_t hdr = {0};
+    memcpy(hdr.magic, GB_STATE_MAGIC, 4);
+    hdr.version  = GB_STATE_VERSION;
+    esp_app_get_elf_sha256(hdr.elf_sha, sizeof(hdr.elf_sha));
+    hdr.gb_size  = sizeof(struct gb_s);
+    hdr.ram_size = (uint32_t)G.save_size;
+
+    ui_spi_lock();
+    FILE *f = fopen(tmp, "wb");
+    ui_spi_unlock();
+    if (!f) {
+        ui_show_toast("Állapot mentése sikertelen (SD)");
+        return;
+    }
+    ui_spi_lock();
+    bool ok = fwrite(&hdr, 1, sizeof(hdr), f) == sizeof(hdr);
+    ui_spi_unlock();
+    if (ok) ok = locked_io(f, (uint8_t *)G.gb, sizeof(struct gb_s), true);
+    if (ok && G.save_size)
+        ok = locked_io(f, G.cart_ram, G.save_size, true);
+    ui_spi_lock();
+    fclose(f);
+    if (!ok) remove(tmp);
+    else { remove(G.state_path); ok = rename(tmp, G.state_path) == 0; }
+    ui_spi_unlock();
+
+    ui_show_toast(ok ? "Állapot elmentve" : "Állapot mentése sikertelen (SD)");
+    if (ok) ESP_LOGI(TAG, "state mentve: %s", G.state_path);
+}
+
+static void state_load(void)
+{
+    ui_spi_lock();
+    FILE *f = fopen(G.state_path, "rb");
+    ui_spi_unlock();
+    if (!f) {
+        ui_show_toast("Nincs mentett állapot");
+        return;
+    }
+
+    gb_state_hdr_t hdr;
+    ui_spi_lock();
+    bool ok = fread(&hdr, 1, sizeof(hdr), f) == sizeof(hdr);
+    ui_spi_unlock();
+    char sha[17] = {0};
+    esp_app_get_elf_sha256(sha, sizeof(sha));
+    if (!ok || memcmp(hdr.magic, GB_STATE_MAGIC, 4) != 0
+            || hdr.version != GB_STATE_VERSION
+            || hdr.gb_size != sizeof(struct gb_s)
+            || hdr.ram_size != G.save_size) {
+        ui_spi_lock(); fclose(f); ui_spi_unlock();
+        ui_show_toast("Az állapotfájl nem használható");
+        return;
+    }
+    if (strncmp(hdr.elf_sha, sha, sizeof(sha)) != 0) {
+        ui_spi_lock(); fclose(f); ui_spi_unlock();
+        ui_show_toast("Az állapot más firmware-rel készült");
+        return;
+    }
+
+    // Előbb átmeneti bufferbe — félbeszakadt olvasás ne hagyjon korrupt
+    // gépállapotot a futó emulátorban.
+    size_t total = sizeof(struct gb_s) + G.save_size;
+    uint8_t *buf = heap_caps_malloc(total, MALLOC_CAP_SPIRAM);
+    if (!buf) {
+        ui_spi_lock(); fclose(f); ui_spi_unlock();
+        ui_show_toast("Nincs elég memória");
+        return;
+    }
+    ok = locked_io(f, buf, total, false);
+    ui_spi_lock();
+    fclose(f);
+    ui_spi_unlock();
+    if (!ok) {
+        heap_caps_free(buf);
+        ui_show_toast("Az állapotfájl sérült");
+        return;
+    }
+
+    memcpy(G.gb, buf, sizeof(struct gb_s));
+    if (G.save_size) {
+        memcpy(G.cart_ram, buf + sizeof(struct gb_s), G.save_size);
+        G.cart_dirty = true;   // a .sav baseline-tól eltérhet
+    }
+    heap_caps_free(buf);
+    rebind_gb_callbacks();
+    ui_show_toast("Állapot betöltve");
+    ESP_LOGI(TAG, "state betöltve: %s", G.state_path);
+}
+
 bool gbmode_start(const char *rom_path, gbmode_exit_cb_t on_exit)
 {
     if (G.active) return false;
@@ -760,9 +955,10 @@ bool gbmode_start(const char *rom_path, gbmode_exit_cb_t on_exit)
             free_buffers();
             return false;
         }
-        save_path_from_rom(rom_path);
+        sidecar_path(G.save_path, sizeof(G.save_path), rom_path, ".sav");
         load_save();
     }
+    sidecar_path(G.state_path, sizeof(G.state_path), rom_path, ".state");
     gb_init_lcd(G.gb, cb_lcd_line);
 
     // Üres (legvilágosabb shade) első frame mindkét bufferbe.
@@ -796,6 +992,7 @@ bool gbmode_start(const char *rom_path, gbmode_exit_cb_t on_exit)
     // sebesség; a villogó sprite-okat a fázistörő teszi láthatóvá.
     G.core_orig   = false;
     G.render_mode = GB_RM_FRAMESKIP;
+    G.state_req   = 0;
     G.touch_mask  = 0;
     memset((void *)G.inject, 0, sizeof(G.inject));
     G.on_exit     = on_exit;

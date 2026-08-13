@@ -29,6 +29,7 @@ idf_component_register(
         "../managed_components/chmorgan__esp-libhelix-mp3/libhelix-mp3/real"
     REQUIRES
         driver
+        esp_app_format   # esp_app_get_elf_sha256 — save state build-azonosító
         esp_lcd
         esp_adc
         esp_timer
