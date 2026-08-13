@@ -80,3 +80,7 @@ CONFIG_COMPILER_OPTIMIZATION_PERF=y
 # flush-buffer 40->24 sorra csökkentése teremti elő (ui.c) — e nélkül a
 # buf2-alloc bootkor elhasal!
 CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+
+# Bootloader-log Warning szintre: deep sleep-ből minden ébredés(-kísérlet)
+# teljes boot — INFO szinten ~30 sor UART-forgalom (LED + fogyasztás).
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y

@@ -289,18 +289,6 @@ void ui_init(void)
 #define TOUCH_I2C_PORT   I2C_NUM_0
 #define TOUCH_I2C_HZ     400000
 
-// Ellenőrző press-log (transzformált, LVGL-koordináta). Bal-felső ~(0,0),
-// jobb-alsó ~(480,320). Az 1. fázis (widget-viselkedés) után törölhető.
-static void touch_log_event_cb(lv_event_t *e)
-{
-    (void)e;
-    lv_indev_t *indev = lv_indev_active();
-    if (!indev) return;
-    lv_point_t p;
-    lv_indev_get_point(indev, &p);
-    ESP_LOGI(TAG, "touch press @ (%d, %d)", (int)p.x, (int)p.y);
-}
-
 static void ui_touch_init(void)
 {
     ESP_LOGI(TAG, "FT6336 touch init (I2C %d, SDA %d, SCL %d, RST %d, polling)",
@@ -363,12 +351,9 @@ static void ui_touch_init(void)
         lv_indev_set_scroll_limit(indev, 5);
     }
 
-    for (int i = 0; i < UI_SCREEN_COUNT; i++) {
-        lv_obj_add_event_cb(U.scr[i], touch_log_event_cb, LV_EVENT_PRESSED, NULL);
-    }
     lvgl_port_unlock();
 
-    ESP_LOGI(TAG, "touch ready — bal-felső ~(0,0), jobb-alsó ~(480,320). Oldalváltás: ←/→ nyilak a headerben.");
+    ESP_LOGI(TAG, "touch ready");
 }
 
 // -----------------------------------------------------------------------------
