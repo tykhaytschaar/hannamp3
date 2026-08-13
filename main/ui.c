@@ -241,7 +241,11 @@ void ui_init(void)
     const lvgl_port_display_cfg_t disp_cfg = {
         .io_handle = io_handle,
         .panel_handle = panel,
-        .buffer_size = LCD_H_RES * 40,
+        // 24 sor (korábban 40): a 2×(480×24×2 B) = 46 KB belső DMA-buffer
+        // 30,7 KB-tal kevesebb, mint a 40 soros — ebből fér ki a 32 KB-os
+        // utasítás-cache (GB emulátor-gyorsítás). Teljes flush: 14 sáv 8
+        // helyett; a sávnyi SPI-átvitel sebessége változatlan.
+        .buffer_size = LCD_H_RES * 24,
         .double_buffer = true,
         .hres = LCD_H_RES,
         .vres = LCD_V_RES,
@@ -284,18 +288,6 @@ void ui_init(void)
 // -----------------------------------------------------------------------------
 #define TOUCH_I2C_PORT   I2C_NUM_0
 #define TOUCH_I2C_HZ     400000
-
-// Ellenőrző press-log (transzformált, LVGL-koordináta). Bal-felső ~(0,0),
-// jobb-alsó ~(480,320). Az 1. fázis (widget-viselkedés) után törölhető.
-static void touch_log_event_cb(lv_event_t *e)
-{
-    (void)e;
-    lv_indev_t *indev = lv_indev_active();
-    if (!indev) return;
-    lv_point_t p;
-    lv_indev_get_point(indev, &p);
-    ESP_LOGI(TAG, "touch press @ (%d, %d)", (int)p.x, (int)p.y);
-}
 
 static void ui_touch_init(void)
 {
@@ -359,12 +351,9 @@ static void ui_touch_init(void)
         lv_indev_set_scroll_limit(indev, 5);
     }
 
-    for (int i = 0; i < UI_SCREEN_COUNT; i++) {
-        lv_obj_add_event_cb(U.scr[i], touch_log_event_cb, LV_EVENT_PRESSED, NULL);
-    }
     lvgl_port_unlock();
 
-    ESP_LOGI(TAG, "touch ready — bal-felső ~(0,0), jobb-alsó ~(480,320). Oldalváltás: ←/→ nyilak a headerben.");
+    ESP_LOGI(TAG, "touch ready");
 }
 
 // -----------------------------------------------------------------------------
@@ -1205,6 +1194,49 @@ void ui_show_no_track(void)
             lv_obj_add_flag(U.np_img_cover, LV_OBJ_FLAG_HIDDEN);
         }
     }
+    lvgl_port_unlock();
+}
+
+// Rövid, magától eltűnő hibajelzés/üzenet a képernyő alján. A SYS layeren ül
+// (nem a top layeren!): azt a játékmód/picker sem rejti el, így a save
+// state visszajelzései játék közben is látszanak. Újabb toast a régit
+// lecseréli.
+static lv_obj_t *s_toast;
+
+static void toast_expire_cb(lv_timer_t *t)
+{
+    (void)t;   // repeat_count=1 → a timer a lefutás után magától törlődik
+    if (s_toast) {
+        lv_obj_delete(s_toast);
+        s_toast = NULL;
+    }
+}
+
+void ui_show_toast(const char *msg)
+{
+    lvgl_port_lock(0);
+    if (s_toast) {
+        lv_obj_delete(s_toast);
+        s_toast = NULL;
+    }
+    lv_obj_t *p = lv_obj_create(lv_layer_sys());
+    lv_obj_remove_style_all(p);
+    // A sys layer nem örökli a top layerre állított fontot — explicit kell,
+    // különben a beépített montserratból hiányoznak az ékezetes betűk.
+    lv_obj_set_style_text_font(p, &mp3_inter_14, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(p, COL_BG_PANEL_2, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(p, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(p, 8, LV_PART_MAIN);
+    lv_obj_set_style_pad_hor(p, 16, LV_PART_MAIN);
+    lv_obj_set_style_pad_ver(p, 10, LV_PART_MAIN);
+    lv_obj_set_size(p, LV_SIZE_CONTENT, LV_SIZE_CONTENT);
+    lv_obj_t *lbl = lv_label_create(p);
+    lv_obj_set_style_text_color(lbl, COL_TEXT, LV_PART_MAIN);
+    lv_label_set_text(lbl, msg);
+    lv_obj_align(p, LV_ALIGN_BOTTOM_MID, 0, -16);
+    s_toast = p;
+    lv_timer_t *t = lv_timer_create(toast_expire_cb, 2500, NULL);
+    lv_timer_set_repeat_count(t, 1);
     lvgl_port_unlock();
 }
 

@@ -10,6 +10,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_timer.h"
+#include "esp_app_desc.h"   // esp_app_get_elf_sha256 (save state build-azonosító)
 
 #include "lvgl.h"
 #include "esp_lvgl_port.h"
@@ -20,15 +21,24 @@
 #include "ui.h"
 #include "mp3_fonts.h"
 
-// Peanut-GB: single-header emulátor, az implementáció EBBE a fordítási
-// egységbe kerül (máshol nem includolható implementációval).
-// HIGH_LCD_ACCURACY=0: a soronkénti sprite-rendezés kihagyása — mérhetően
-// gyorsabb render, az ára ritka sprite-prioritási pontatlanság (10+ sprite
-// egy sorban). A nehéz (GB Studio) játékok valós idejűségéhez kell.
+// Walnut-CGB: single-header DMG+CGB emulátor (a Peanut-GB teljesítmény-
+// orientált újraírása), az implementáció EBBE a fordítási egységbe kerül
+// (máshol nem includolható implementációval).
+// HIGH_LCD_ACCURACY=1: a Peanut-os buildben 0 volt (gyorsabb render), de a
+// Walnut CGB-módjában a gyorsított sprite-út hibagyanús (SMB Deluxe: eltűnő
+// karakter-sprite) — amíg ez nem tisztázott, a pontos út megy. Ha a HW-teszt
+// igazolja, hogy DMG-ben kell a sebesség, mehet vissza kétágúra.
+// A default WALNUT_GB_32BIT_DMA=1 miatt a mag a 32 bites ROM-olvasót
+// használja DMA-átvitelekhez — a byte-onkénti PSRAM-olvasásnál gyorsabb.
 #define ENABLE_LCD   1
 #define ENABLE_SOUND 0
-#define PEANUT_GB_HIGH_LCD_ACCURACY 0
-#include "peanut_gb.h"
+#define WALNUT_GB_HIGH_LCD_ACCURACY 1
+// Upstream C-fordítási hiba megkerülése patch nélkül: a header eleji
+// __gb_*-prototípusok a struct gb_s definíciója előtt állnak, ami C-ben
+// (C++-szal ellentétben) prototípus-lokális struct-típust hozna létre →
+// "conflicting types". A file-scope forward-deklaráció ezt feloldja.
+struct gb_s;
+#include "walnut_cgb.h"
 
 static const char *TAG = "gb";
 
@@ -68,13 +78,19 @@ static struct {
     bool             active;
     volatile bool    exit_req;     // kilépés-kérés (bármely kontextusból)
     volatile bool    task_done;    // az emulációs task leállt, jöhet a lebontás
-    struct gb_s     *gb;           // emulátor-állapot (PSRAM, ~17 KB)
+    struct gb_s     *gb;           // emulátor-állapot (PSRAM; CGB-vel ~70 KB)
     uint8_t         *rom;          // teljes ROM (PSRAM)
     uint8_t         *cart_ram;     // cart RAM, ha a játéknak van (PSRAM)
+    size_t           save_size;    // cart RAM mérete (0 = nincs mentés)
+    char             save_path[MAX_PATH_LEN];   // <rom>.sav az SD-n
+    char             state_path[MAX_PATH_LEN];  // <rom>.state az SD-n
+    volatile bool    cart_dirty;   // írt-e a játék a cart RAM-ba
+    volatile int     state_req;    // 1 = mentés, 2 = betöltés (gb_task hajtja végre)
     uint8_t         *fb[2];        // 320×288 RGB565 dupla buffer (PSRAM)
     volatile int     front;        // a kész, megjeleníthető buffer indexe
     int              back;         // amibe a scanline-ok íródnak
     volatile bool    frame_ready;
+    bool             frame_drawn;  // a mag rajzolt-e ebbe a frame-be (frameskip!)
     lv_obj_t        *scr;
     lv_obj_t        *img;
     lv_image_dsc_t   dsc;
@@ -82,7 +98,32 @@ static struct {
     gbmode_exit_cb_t on_exit;
     volatile uint8_t touch_mask;   // touch-gombok nyomva-tartott JOYPAD bitjei
     volatile uint8_t inject[8];    // CLI-tap: JOYPAD bitenként hátralévő frame-ek
+    // Hangolási A/B-kapcsolók (CLI: ##gbcore## / ##gbfs##). A gb_task frame-
+    // enként olvassa be őket — a gb_s bitmezőit csak az emu task írja.
+    volatile bool    core_orig;    // true: gb_run_frame (8 bites diszpécser)
+    volatile int     render_mode;  // GB_RM_* — render-spórolás módja
 } G;
+
+// Render-mód: mind ugyanazt a CPU-emulációt futtatja, a render-költség
+// különbözik. Adaptív a default: amíg a renderelt frame-ek gördülő
+// emu-idő-átlaga belefér a frame-keretbe, minden frame teljesen renderelődik
+// (a sprite-villogtatás fázishelyesen látszik); ha túlcsordul (nehéz jelenet,
+// CGB double-speed), frameskipre vált — hiszterézissel, fázistörővel.
+// A fix módok A/B-összehasonlításhoz maradnak (CLI: ##gbfs## ciklus).
+enum {
+    GB_RM_ADAPTIVE = 0,    // teljes render, túlterhelésnél frameskip (default)
+    GB_RM_FULL,            // mindig minden frame teljes render
+    GB_RM_FRAMESKIP,       // mindig minden 2. frame (fázistörővel)
+    GB_RM_INTERLACE,       // minden 2. sor / frame — sprite-villogtatásnál
+                           // fésű-hatás, csak kísérletezéshez
+    GB_RM_COUNT
+};
+// Adaptív küszöbök a renderelt frame-ek EMA-jára (µs). A be- és kikapcsolási
+// szint közti rés a hiszterézis: a renderelt frame-ek ideje frameskip alatt
+// is a TELJES render-költséget méri (a kihagyott frame nem kerül az EMA-ba),
+// így a visszakapcsolás nem oszcillál.
+#define GB_ADAPT_ON_US   16000   // e fölött: frameskip BE
+#define GB_ADAPT_OFF_US  13500   // ez alatt: vissza teljes renderre
 
 // -----------------------------------------------------------------------------
 // Peanut-GB callbackek (az emulációs task kontextusában futnak)
@@ -91,6 +132,28 @@ static uint8_t cb_rom_read(struct gb_s *gb, const uint_fast32_t addr)
 {
     (void)gb;
     return G.rom[addr];
+}
+
+// 16/32 bites ROM-olvasók: a heap-allokált ROM-bázis igazított, de a kért
+// GB-cím nem feltétlenül — igazítatlan címre bájtonkénti fallback (a PSRAM
+// igazítatlan wide-olvasást nem tűr).
+static uint16_t cb_rom_read16(struct gb_s *gb, const uint_fast32_t addr)
+{
+    (void)gb;
+    const uint8_t *src = G.rom + addr;
+    if ((uintptr_t)src & 1)
+        return (uint16_t)src[0] | ((uint16_t)src[1] << 8);
+    return *(const uint16_t *)src;
+}
+
+static uint32_t cb_rom_read32(struct gb_s *gb, const uint_fast32_t addr)
+{
+    (void)gb;
+    const uint8_t *src = G.rom + addr;
+    if ((uintptr_t)src & 3)
+        return (uint32_t)src[0] | ((uint32_t)src[1] << 8) |
+               ((uint32_t)src[2] << 16) | ((uint32_t)src[3] << 24);
+    return *(const uint32_t *)src;
 }
 
 static uint8_t cb_cart_ram_read(struct gb_s *gb, const uint_fast32_t addr)
@@ -103,7 +166,10 @@ static void cb_cart_ram_write(struct gb_s *gb, const uint_fast32_t addr,
                               const uint8_t val)
 {
     (void)gb;
-    if (G.cart_ram) G.cart_ram[addr] = val;
+    if (G.cart_ram) {
+        G.cart_ram[addr] = val;
+        G.cart_dirty = true;   // kilépéskor van mit menteni
+    }
 }
 
 static void cb_error(struct gb_s *gb, const enum gb_error_e err,
@@ -115,15 +181,30 @@ static void cb_error(struct gb_s *gb, const enum gb_error_e err,
 }
 
 // Egy GB scanline → két 320 px-es sor a back-bufferben (2× nearest).
+// CGB-módban a pixel közvetlen 6 bites index a mag által paletta-íráskor
+// BGR555→RGB565-re konvertált fixPalette[64] táblába (BG: 0..31, OBJ:
+// 32..63) — per-pixel egyetlen tömbindexelés. DMG-módban a pixel alsó
+// 2 bitje a shade, a régi GB_PAL út változatlan.
 static void cb_lcd_line(struct gb_s *gb, const uint8_t *pixels,
                         const uint_fast8_t line)
 {
-    (void)gb;
+    G.frame_drawn = true;
     uint16_t *dst = (uint16_t *)G.fb[G.back] + (size_t)line * 2 * GB_OUT_W;
-    for (int x = 0; x < LCD_WIDTH; x++) {
-        uint16_t c = GB_PAL[pixels[x] & 3];
-        dst[2 * x]     = c;
-        dst[2 * x + 1] = c;
+    // A pixel-pár egyetlen 32 bites store — fele annyi PSRAM-írás. A dst
+    // páros indexű, a buffer-bázis heap-igazított → a pár mindig 4 bájtos
+    // határon ül.
+    uint32_t *dst32 = (uint32_t *)dst;
+    if (gb->cgb.cgbMode) {
+        const uint16_t *pal = gb->cgb.fixPalette;
+        for (int x = 0; x < LCD_WIDTH; x++) {
+            uint32_t c = pal[pixels[x] & 0x3F];
+            dst32[x] = c | (c << 16);
+        }
+    } else {
+        for (int x = 0; x < LCD_WIDTH; x++) {
+            uint32_t c = GB_PAL[pixels[x] & 3];
+            dst32[x] = c | (c << 16);
+        }
     }
     memcpy(dst + GB_OUT_W, dst, GB_OUT_W * sizeof(uint16_t));
 }
@@ -182,6 +263,10 @@ static void poll_input(void)
 // -----------------------------------------------------------------------------
 // Emulációs task (1-es mag, PSRAM-stack — flash-műveletet nem végez)
 // -----------------------------------------------------------------------------
+static void write_save(void);   // battery-save blokk lentebb
+static void state_save(void);   // save state blokk lentebb
+static void state_load(void);
+
 static void gb_task(void *arg)
 {
     (void)arg;
@@ -189,19 +274,74 @@ static void gb_task(void *arg)
     int64_t stat_t0 = next;
     int     stat_frames = 0;
     int64_t stat_emu_us = 0;
+    int     fs_break = 0;
+    int64_t ema_us = 0;        // renderelt frame-ek emu-idejének EMA-ja
+    bool    adapt_skip = false;
     while (!G.exit_req) {
+        // Save state kérés (touch-gombról) — frame-határon, ebben a taskban:
+        // a gb_s struct kiírás/visszatöltés közben garantáltan nem mozog.
+        if (G.state_req) {
+            int req = G.state_req;
+            G.state_req = 0;
+            if (req == 1) state_save();
+            else          state_load();
+            next = esp_timer_get_time();   // SD-művelet után friss pacing
+        }
         poll_input();
+        int rm = G.render_mode;
+        bool fs;
+        if (rm == GB_RM_ADAPTIVE) {
+            if (adapt_skip) {
+                if (ema_us < GB_ADAPT_OFF_US) {
+                    adapt_skip = false;
+                    ESP_LOGI(TAG, "adaptív: teljes render (ema=%d us)",
+                             (int)ema_us);
+                }
+            } else if (ema_us > GB_ADAPT_ON_US) {
+                adapt_skip = true;
+                ESP_LOGI(TAG, "adaptív: frameskip BE (ema=%d us)",
+                         (int)ema_us);
+            }
+            fs = adapt_skip;
+        } else {
+            fs = (rm == GB_RM_FRAMESKIP);
+        }
+        // Frameskip fázistörője: a villogtatott sprite (minden 2. frame
+        // rejtett) ne ragadhasson végleg a kihagyott fázisra — ~0,5 s-onként
+        // (31 frame, páratlan!) egy skip kimarad, a render-paritás átfordul.
+        if (fs && ++fs_break >= 31) {
+            fs_break = 0;
+            fs = false;
+        }
+        G.gb->direct.frame_skip = fs;
+        G.gb->direct.interlace  = (rm == GB_RM_INTERLACE);
         int64_t t0 = esp_timer_get_time();
-        gb_run_frame(G.gb);
-        stat_emu_us += esp_timer_get_time() - t0;
+        if (G.core_orig)
+            gb_run_frame(G.gb);             // eredeti 8 bites diszpécser
+        else
+            gb_run_frame_dualfetch(G.gb);   // 16 bites dual-fetch út
+        int64_t dt = esp_timer_get_time() - t0;
+        stat_emu_us += dt;
         stat_frames++;
+        // EMA csak RENDERELT frame-ből: az a teljes (CPU+render) költséget
+        // méri frameskip alatt is — a kihagyott (olcsó) frame torzítana.
+        if (G.frame_drawn)
+            ema_us = ema_us ? (ema_us * 7 + dt) / 8 : dt;
 
         // Kész frame: buffer-csere + jelzés a present-timernek. (Dupla
         // bufferrel az épp flusholódó frame-be elvétve beleírhatunk — az
         // esetleges apró tearing v1-ben vállalt kompromisszum.)
-        G.front = G.back;
-        G.back ^= 1;
-        G.frame_ready = true;
+        // Frameskipnél a mag minden 2. frame-et NEM rajzolja meg — ilyenkor
+        // csere/jelzés sincs, különben egy elavult buffer villogna be.
+        // Interlace-nél a két félképnek ugyanabba a bufferbe kell gyűlnie:
+        // buffert NEM váltunk (front=back), különben mindkét buffer örökre
+        // csak az egyik sor-paritást kapná.
+        if (G.frame_drawn) {
+            G.frame_drawn = false;
+            G.front = G.back;
+            if (rm != GB_RM_INTERLACE) G.back ^= 1;
+            G.frame_ready = true;
+        }
 
         // Valós idejű 59,73 Hz pacing: ms-pontos vTaskDelay (1 kHz tick) +
         // a maradék finomvárás. Nagy csúszásnál az adósságot eldobjuk.
@@ -224,6 +364,9 @@ static void gb_task(void *arg)
             stat_emu_us = 0;
         }
     }
+    // Battery-save kiírása MÉG a task-done jelzés előtt: a do_exit csak
+    // ezután szabadítja fel a cart RAM-ot (use-after-free ellen).
+    write_save();
     G.task_done = true;
     vTaskDelete(NULL);
 }
@@ -291,6 +434,13 @@ static void exit_btn_click(lv_event_t *e)
     gbmode_request_exit();   // a lebontást a present-timer intézi (task_done)
 }
 
+// Save state gomb: csak kérést állít be — a tényleges SD-műveletet a
+// gb_task végzi frame-határon (LVGL-kontextusból tilos ide SD-t írni).
+static void state_btn_click(lv_event_t *e)
+{
+    G.state_req = (int)(uintptr_t)lv_event_get_user_data(e);
+}
+
 // Touch-gomb (jobb oldalsáv): nyomva tartásig tartó joypad-bit.
 static void touch_btn_event(lv_event_t *e)
 {
@@ -325,7 +475,7 @@ static lv_obj_t *side_button(lv_obj_t *parent, const char *text, int x, int y,
     return btn;
 }
 
-static void build_screen(const char *title)
+static void build_screen(void)
 {
     G.scr = lv_obj_create(NULL);
     lv_obj_set_style_bg_color(G.scr, COL_BG, LV_PART_MAIN);
@@ -335,10 +485,8 @@ static void build_screen(const char *title)
     lv_obj_set_style_text_font(G.scr, &mp3_inter_14, LV_PART_MAIN);
     lv_obj_remove_flag(G.scr, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Bal sáv: Exit + virtuális D-pad (IDEIGLENES, a fizikai gombok
-    // bekötéséig — utána a sáv visszaegyszerűsödik Exit + címre).
-    // Megkötés: az LVGL pointer-indev egy érintést követ → egyszerre egy
-    // virtuális gomb nyomható (irány + A kombó nem megy touchról).
+    // Bal sáv: csak az Exit gomb — a játékvezérlés a fizikai gombokon megy,
+    // touchon csak az marad, aminek nincs fizikai párja (Start/Select).
     lv_obj_t *left = lv_obj_create(G.scr);
     lv_obj_remove_style_all(left);
     lv_obj_set_size(left, GB_PANEL_W, LCD_V_RES);
@@ -360,33 +508,38 @@ static void build_screen(const char *title)
     lv_label_set_text(xl, LV_SYMBOL_LEFT " Kilépés");
     lv_obj_center(xl);
 
-    // D-pad: fel / (balra|jobbra) / le. ASCII feliratok — a saját fontok
-    // szimbólum-lefedettsége a fel/le chevronokra nem garantált.
-    side_button(left, "^", 6,  78, GB_PANEL_W - 12, 56, JOYPAD_UP);
-    side_button(left, "<", 4,  140, 34, 56, JOYPAD_LEFT);
-    side_button(left, ">", 42, 140, 34, 56, JOYPAD_RIGHT);
-    side_button(left, "v", 6,  202, GB_PANEL_W - 12, 56, JOYPAD_DOWN);
+    // Save state gombok: pillanatkép mentése/betöltése (checkpoint —
+    // mentés nélküli játékoknál is). A művelet a gb_task-ban fut.
+    static const struct { const char *txt; int req; int y; } SBTN[] = {
+        { "Mentés",   1, 78 },
+        { "Betöltés", 2, 134 },
+    };
+    for (int i = 0; i < 2; i++) {
+        lv_obj_t *btn = lv_button_create(left);
+        lv_obj_set_size(btn, GB_PANEL_W - 12, 48);
+        lv_obj_set_pos(btn, 6, SBTN[i].y);
+        lv_obj_set_style_bg_color(btn, COL_BG_PANEL_2, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(btn, 8, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(btn, 0, LV_PART_MAIN);
+        lv_obj_add_event_cb(btn, state_btn_click, LV_EVENT_CLICKED,
+                            (void *)(uintptr_t)SBTN[i].req);
+        lv_obj_t *bl = lv_label_create(btn);
+        lv_obj_set_style_text_color(bl, COL_TEXT_DIM, 0);
+        lv_label_set_text(bl, SBTN[i].txt);
+        lv_obj_center(bl);
+    }
 
-    lv_obj_t *lbl = lv_label_create(left);
-    lv_obj_set_width(lbl, GB_PANEL_W - 12);
-    lv_label_set_long_mode(lbl, LV_LABEL_LONG_DOT);
-    lv_obj_set_style_text_color(lbl, COL_TEXT_DIM, 0);
-    lv_obj_set_style_text_align(lbl, LV_TEXT_ALIGN_CENTER, 0);
-    lv_label_set_text(lbl, title);
-    lv_obj_set_pos(lbl, 6, 286);
-
-    // Jobb sáv: A / B / Start / Select touch-gombok (szintén ideiglenes
-    // teljes kiosztás — a fizikai gombok után A/B lekerülhet innen).
+    // Jobb sáv: Start / Select touch-gombok — ezeknek nincs dedikált
+    // fizikai gombjuk (az X/Y gomb ütné őket, de touchról kényelmesebb).
     lv_obj_t *right = lv_obj_create(G.scr);
     lv_obj_remove_style_all(right);
     lv_obj_set_size(right, GB_PANEL_W, LCD_V_RES);
     lv_obj_set_pos(right, LCD_H_RES - GB_PANEL_W, 0);
     lv_obj_set_style_bg_color(right, COL_BG_PANEL, LV_PART_MAIN);
     lv_obj_set_style_bg_opa(right, LV_OPA_COVER, LV_PART_MAIN);
-    side_button(right, "A",      6, 8,   GB_PANEL_W - 12, 64, JOYPAD_A);
-    side_button(right, "B",      6, 80,  GB_PANEL_W - 12, 64, JOYPAD_B);
-    side_button(right, "Start",  6, 152, GB_PANEL_W - 12, 48, JOYPAD_START);
-    side_button(right, "Select", 6, 208, GB_PANEL_W - 12, 48, JOYPAD_SELECT);
+    side_button(right, "Start",  6, 8,  GB_PANEL_W - 12, 56, JOYPAD_START);
+    side_button(right, "Select", 6, 72, GB_PANEL_W - 12, 56, JOYPAD_SELECT);
 
     // Játéktér
     G.img = lv_image_create(G.scr);
@@ -407,6 +560,21 @@ void gbmode_request_exit(void)
     if (G.active) G.exit_req = true;
 }
 
+// CLI A/B-kapcsolók a hangoláshoz — az fps/emu-log mutatja a hatást.
+void gbmode_toggle_core(void)
+{
+    G.core_orig = !G.core_orig;
+    ESP_LOGI(TAG, "core: %s", G.core_orig ? "eredeti (8 bit)" : "dualfetch");
+}
+
+void gbmode_cycle_render_mode(void)
+{
+    static const char *names[GB_RM_COUNT] =
+        { "adaptív", "teljes render", "frameskip", "interlace" };
+    G.render_mode = (G.render_mode + 1) % GB_RM_COUNT;
+    ESP_LOGI(TAG, "render-mód: %s", names[G.render_mode]);
+}
+
 // ROM beolvasása PSRAM-ba — 64 KB-os chunkokban, hogy az SPI-lock (flush-
 // kizárás) ne egyben fogja a buszt egy nagy ROM-nál.
 static uint8_t *load_rom(const char *path, size_t *out_size)
@@ -422,6 +590,8 @@ static uint8_t *load_rom(const char *path, size_t *out_size)
     if (size <= 0x150 || size > GB_ROM_MAX) {   // 0x150 = GB header vége
         fclose(f);
         ESP_LOGW(TAG, "érvénytelen ROM-méret: %ld", size);
+        ui_show_toast(size > GB_ROM_MAX ? "Túl nagy ROM (max 4 MB)"
+                                        : "Hibás vagy sérült ROM");
         return NULL;
     }
 
@@ -449,6 +619,299 @@ static uint8_t *load_rom(const char *path, size_t *out_size)
     return rom;
 }
 
+// -----------------------------------------------------------------------------
+// Battery-save (.sav) perzisztencia — cart RAM + (MBC3) RTC az SD-n, a ROM
+// mellett. Formátum: nyers cart RAM, MBC3-nál 48 bájtos VBA/retro-go-
+// kompatibilis RTC-blokkal a végén (5×int32 LE aktuális + 5×int32 LE
+// latchelt regiszter + 8 bájt unix-idő — valós óránk nincs, az idő 0).
+// Minden SD-elérés ui_spi_lock alatt (flush-kizárás, lásd a fájl tetejét).
+// -----------------------------------------------------------------------------
+#define GB_SAV_RTC_LEN 48
+
+// <ROM útvonal> kiterjesztése lecserélve (.sav / .state kísérőfájlok).
+static void sidecar_path(char *dst, size_t n, const char *rom_path,
+                         const char *ext)
+{
+    strlcpy(dst, rom_path, n);
+    char *dot   = strrchr(dst, '.');
+    char *slash = strrchr(dst, '/');
+    if (dot && (!slash || dot > slash)) *dot = 0;
+    strlcat(dst, ext, n);
+}
+
+// Betöltés induláskor. Hiányzó fájl = friss játék (nem hiba). Hibás méretű/
+// olvashatatlan mentésnél nullázott RAM-mal indulunk, jelzéssel.
+static void load_save(void)
+{
+    if (!G.cart_ram || !G.save_size) return;
+
+    ui_spi_lock();
+    FILE *f = fopen(G.save_path, "rb");
+    ui_spi_unlock();
+    if (!f) return;
+
+    ui_spi_lock();
+    fseek(f, 0, SEEK_END);
+    long fsize = ftell(f);
+    fseek(f, 0, SEEK_SET);
+    ui_spi_unlock();
+
+    size_t got = 0;
+    while (got < G.save_size) {
+        size_t chunk = G.save_size - got;
+        if (chunk > 65536) chunk = 65536;
+        ui_spi_lock();
+        size_t n = fread(G.cart_ram + got, 1, chunk, f);
+        ui_spi_unlock();
+        if (n == 0) break;
+        got += n;
+    }
+
+    if (got != G.save_size) {
+        ESP_LOGW(TAG, "sérült mentés (%u/%u B) — új játék: %s",
+                 (unsigned)got, (unsigned)G.save_size, G.save_path);
+        memset(G.cart_ram, 0, G.save_size);
+        ui_show_toast("Sérült mentésfájl — új játék indul");
+    } else if (G.gb->mbc == 3 && fsize >= (long)(G.save_size + 44)) {
+        // RTC-blokk (44 = régi VBA 4 bájtos idővel, 48 = mai formátum).
+        uint8_t rtc[GB_SAV_RTC_LEN] = {0};
+        size_t rtc_len = (size_t)fsize - G.save_size;
+        if (rtc_len > sizeof(rtc)) rtc_len = sizeof(rtc);
+        ui_spi_lock();
+        size_t n = fread(rtc, 1, rtc_len, f);
+        ui_spi_unlock();
+        if (n >= 40) {
+            for (int i = 0; i < 5; i++) {
+                G.gb->rtc_real.bytes[i]    = rtc[i * 4];
+                G.gb->rtc_latched.bytes[i] = rtc[20 + i * 4];
+            }
+        }
+    }
+
+    ui_spi_lock();
+    fclose(f);
+    ui_spi_unlock();
+    ESP_LOGI(TAG, "mentés betöltve: %s (%u B)", G.save_path,
+             (unsigned)G.save_size);
+}
+
+// Mentés kilépéskor — a gb_task kontextusában (core 1), NEM az LVGL-oldali
+// do_exit-ben, hogy az írás ne fogja a core 0-t. Atomikus: előbb .tmp,
+// aztán rename — áramszünet/hiba esetén a régi mentés érintetlen marad.
+static void write_save(void)
+{
+    if (!G.cart_dirty || !G.cart_ram || !G.save_size) return;
+
+    char tmp[MAX_PATH_LEN];
+    int len = snprintf(tmp, sizeof(tmp), "%s.tmp", G.save_path);
+    if (len < 0 || len >= (int)sizeof(tmp)) return;   // túl hosszú út
+
+    ui_spi_lock();
+    FILE *f = fopen(tmp, "wb");
+    ui_spi_unlock();
+    if (!f) {
+        ESP_LOGE(TAG, "mentés: fopen sikertelen: %s", tmp);
+        ui_show_toast("Mentés írása sikertelen (SD)");
+        return;
+    }
+
+    bool ok = true;
+    size_t off = 0;
+    while (off < G.save_size) {
+        size_t chunk = G.save_size - off;
+        if (chunk > 65536) chunk = 65536;
+        ui_spi_lock();
+        size_t n = fwrite(G.cart_ram + off, 1, chunk, f);
+        ui_spi_unlock();
+        if (n != chunk) { ok = false; break; }
+        off += n;
+    }
+    if (ok && G.gb->mbc == 3) {
+        uint8_t rtc[GB_SAV_RTC_LEN] = {0};
+        for (int i = 0; i < 5; i++) {
+            rtc[i * 4]      = G.gb->rtc_real.bytes[i];
+            rtc[20 + i * 4] = G.gb->rtc_latched.bytes[i];
+        }
+        ui_spi_lock();
+        ok = fwrite(rtc, 1, sizeof(rtc), f) == sizeof(rtc);
+        ui_spi_unlock();
+    }
+    ui_spi_lock();
+    fclose(f);
+    ui_spi_unlock();
+
+    if (!ok) {
+        ui_spi_lock();
+        remove(tmp);
+        ui_spi_unlock();
+        ESP_LOGE(TAG, "mentés: írás sikertelen: %s", tmp);
+        ui_show_toast("Mentés írása sikertelen (SD)");
+        return;
+    }
+
+    ui_spi_lock();
+    remove(G.save_path);              // FAT-on a rename nem ír felül
+    int r = rename(tmp, G.save_path);
+    ui_spi_unlock();
+    if (r != 0) {
+        ESP_LOGE(TAG, "mentés: rename sikertelen: %s", G.save_path);
+        ui_show_toast("Mentés írása sikertelen (SD)");
+        return;
+    }
+    ESP_LOGI(TAG, "mentés kiírva: %s (%u B)", G.save_path,
+             (unsigned)G.save_size);
+}
+
+// -----------------------------------------------------------------------------
+// Save state (.state) — a TELJES emulátor-állapot (gb_s struct + cart RAM)
+// pillanatképe, mag-specifikus nyers formátum. Más emulátorba NEM vihető át
+// (szemben a .sav-val), és csak az AZONOS firmware-builddel tölthető vissza —
+// a fejlécbeli ELF-hash ezt kényszeríti ki. A műveletet a gb_task futtatja
+// frame-határon (state_req), így a struct sosem mozog kiírás közben.
+// -----------------------------------------------------------------------------
+typedef struct {
+    char     magic[4];       // "WGBS"
+    uint32_t version;        // formátum-verzió
+    char     elf_sha[17];    // esp_app_get_elf_sha256() — build-azonosító
+    uint8_t  pad[3];
+    uint32_t gb_size;        // sizeof(struct gb_s) az író buildben
+    uint32_t ram_size;       // cart RAM mérete
+} gb_state_hdr_t;
+#define GB_STATE_MAGIC   "WGBS"
+#define GB_STATE_VERSION 1
+
+// A struct-dumpban a callback-pointerek az ÍRÓ build címeit tartalmazzák —
+// betöltés után kötelező frissre kötni mindet (azonos buildnél elvben
+// azonosak, de ez így minden kétséget kizár).
+static void rebind_gb_callbacks(void)
+{
+    G.gb->gb_rom_read        = cb_rom_read;
+    G.gb->gb_rom_read_16bit  = cb_rom_read16;
+    G.gb->gb_rom_read_32bit  = cb_rom_read32;
+    G.gb->gb_cart_ram_read   = cb_cart_ram_read;
+    G.gb->gb_cart_ram_write  = cb_cart_ram_write;
+    G.gb->gb_error           = cb_error;
+    G.gb->gb_serial_tx       = NULL;
+    G.gb->gb_serial_rx       = NULL;
+    G.gb->gb_bootrom_read    = NULL;
+    G.gb->direct.priv        = NULL;
+    G.gb->display.lcd_draw_line = cb_lcd_line;
+}
+
+// Lockolt, chunkolt fread/fwrite — a .sav-nál bevált minta.
+static bool locked_io(FILE *f, uint8_t *buf, size_t len, bool write)
+{
+    size_t done = 0;
+    while (done < len) {
+        size_t chunk = len - done;
+        if (chunk > 65536) chunk = 65536;
+        ui_spi_lock();
+        size_t n = write ? fwrite(buf + done, 1, chunk, f)
+                         : fread(buf + done, 1, chunk, f);
+        ui_spi_unlock();
+        if (n != chunk && !write) { done += n; break; }
+        if (n != chunk) return false;
+        done += n;
+    }
+    return done == len;
+}
+
+static void state_save(void)
+{
+    char tmp[MAX_PATH_LEN];
+    int len = snprintf(tmp, sizeof(tmp), "%s.tmp", G.state_path);
+    if (len < 0 || len >= (int)sizeof(tmp)) return;
+
+    gb_state_hdr_t hdr = {0};
+    memcpy(hdr.magic, GB_STATE_MAGIC, 4);
+    hdr.version  = GB_STATE_VERSION;
+    esp_app_get_elf_sha256(hdr.elf_sha, sizeof(hdr.elf_sha));
+    hdr.gb_size  = sizeof(struct gb_s);
+    hdr.ram_size = (uint32_t)G.save_size;
+
+    ui_spi_lock();
+    FILE *f = fopen(tmp, "wb");
+    ui_spi_unlock();
+    if (!f) {
+        ui_show_toast("Állapot mentése sikertelen (SD)");
+        return;
+    }
+    ui_spi_lock();
+    bool ok = fwrite(&hdr, 1, sizeof(hdr), f) == sizeof(hdr);
+    ui_spi_unlock();
+    if (ok) ok = locked_io(f, (uint8_t *)G.gb, sizeof(struct gb_s), true);
+    if (ok && G.save_size)
+        ok = locked_io(f, G.cart_ram, G.save_size, true);
+    ui_spi_lock();
+    fclose(f);
+    if (!ok) remove(tmp);
+    else { remove(G.state_path); ok = rename(tmp, G.state_path) == 0; }
+    ui_spi_unlock();
+
+    ui_show_toast(ok ? "Állapot elmentve" : "Állapot mentése sikertelen (SD)");
+    if (ok) ESP_LOGI(TAG, "state mentve: %s", G.state_path);
+}
+
+static void state_load(void)
+{
+    ui_spi_lock();
+    FILE *f = fopen(G.state_path, "rb");
+    ui_spi_unlock();
+    if (!f) {
+        ui_show_toast("Nincs mentett állapot");
+        return;
+    }
+
+    gb_state_hdr_t hdr;
+    ui_spi_lock();
+    bool ok = fread(&hdr, 1, sizeof(hdr), f) == sizeof(hdr);
+    ui_spi_unlock();
+    char sha[17] = {0};
+    esp_app_get_elf_sha256(sha, sizeof(sha));
+    if (!ok || memcmp(hdr.magic, GB_STATE_MAGIC, 4) != 0
+            || hdr.version != GB_STATE_VERSION
+            || hdr.gb_size != sizeof(struct gb_s)
+            || hdr.ram_size != G.save_size) {
+        ui_spi_lock(); fclose(f); ui_spi_unlock();
+        ui_show_toast("Az állapotfájl nem használható");
+        return;
+    }
+    if (strncmp(hdr.elf_sha, sha, sizeof(sha)) != 0) {
+        ui_spi_lock(); fclose(f); ui_spi_unlock();
+        ui_show_toast("Az állapot más firmware-rel készült");
+        return;
+    }
+
+    // Előbb átmeneti bufferbe — félbeszakadt olvasás ne hagyjon korrupt
+    // gépállapotot a futó emulátorban.
+    size_t total = sizeof(struct gb_s) + G.save_size;
+    uint8_t *buf = heap_caps_malloc(total, MALLOC_CAP_SPIRAM);
+    if (!buf) {
+        ui_spi_lock(); fclose(f); ui_spi_unlock();
+        ui_show_toast("Nincs elég memória");
+        return;
+    }
+    ok = locked_io(f, buf, total, false);
+    ui_spi_lock();
+    fclose(f);
+    ui_spi_unlock();
+    if (!ok) {
+        heap_caps_free(buf);
+        ui_show_toast("Az állapotfájl sérült");
+        return;
+    }
+
+    memcpy(G.gb, buf, sizeof(struct gb_s));
+    if (G.save_size) {
+        memcpy(G.cart_ram, buf + sizeof(struct gb_s), G.save_size);
+        G.cart_dirty = true;   // a .sav baseline-tól eltérhet
+    }
+    heap_caps_free(buf);
+    rebind_gb_callbacks();
+    ui_show_toast("Állapot betöltve");
+    ESP_LOGI(TAG, "state betöltve: %s", G.state_path);
+}
+
 bool gbmode_start(const char *rom_path, gbmode_exit_cb_t on_exit)
 {
     if (G.active) return false;
@@ -469,23 +932,32 @@ bool gbmode_start(const char *rom_path, gbmode_exit_cb_t on_exit)
         return false;
     }
 
-    enum gb_init_error_e err = gb_init(G.gb, cb_rom_read, cb_cart_ram_read,
+    enum gb_init_error_e err = gb_init(G.gb, cb_rom_read, cb_rom_read16,
+                                       cb_rom_read32, cb_cart_ram_read,
                                        cb_cart_ram_write, cb_error, NULL);
     if (err != GB_INIT_NO_ERROR) {
         ESP_LOGW(TAG, "gb_init: %d (nem támogatott/hibás ROM?)", (int)err);
+        ui_show_toast(err == GB_INIT_CARTRIDGE_UNSUPPORTED
+                          ? "Nem támogatott játéktípus (MBC)"
+                          : "Hibás vagy sérült ROM");
         free_buffers();
         return false;
     }
 
     size_t save_size = 0;
     if (gb_get_save_size_s(G.gb, &save_size) != 0) save_size = 0;
+    G.save_size  = save_size;
+    G.cart_dirty = false;
     if (save_size > 0) {
         G.cart_ram = heap_caps_calloc(1, save_size, MALLOC_CAP_SPIRAM);
         if (!G.cart_ram) {
             free_buffers();
             return false;
         }
+        sidecar_path(G.save_path, sizeof(G.save_path), rom_path, ".sav");
+        load_save();
     }
+    sidecar_path(G.state_path, sizeof(G.state_path), rom_path, ".state");
     gb_init_lcd(G.gb, cb_lcd_line);
 
     // Üres (legvilágosabb shade) első frame mindkét bufferbe.
@@ -503,22 +975,23 @@ bool gbmode_start(const char *rom_path, gbmode_exit_cb_t on_exit)
     G.dsc.data          = G.fb[0];
     G.dsc.data_size     = GB_OUT_W * GB_OUT_H * 2;
 
-    char name[48];
-    const char *base = strrchr(rom_path, '/');
-    strlcpy(name, base ? base + 1 : rom_path, sizeof(name));   // csonkolás OK
-    char *dot = strrchr(name, '.');
-    if (dot) *dot = 0;
-
     lvgl_port_lock(0);
     lv_obj_add_flag(lv_layer_top(), LV_OBJ_FLAG_HIDDEN);
-    build_screen(name);
+    build_screen();
     lv_screen_load(G.scr);
 
     G.exit_req    = false;
     G.task_done   = false;
     G.frame_ready = false;
+    G.frame_drawn = false;
     G.front       = 0;
     G.back        = 1;
+    // A/B-kapcsolók vissza defaultra — az előző játék kapcsolgatása ne
+    // szivárogjon át. Frameskip a default (user-döntés): konzisztens
+    // sebesség; a villogó sprite-okat a fázistörő teszi láthatóvá.
+    G.core_orig   = false;
+    G.render_mode = GB_RM_FRAMESKIP;
+    G.state_req   = 0;
     G.touch_mask  = 0;
     memset((void *)G.inject, 0, sizeof(G.inject));
     G.on_exit     = on_exit;
@@ -544,7 +1017,14 @@ bool gbmode_start(const char *rom_path, gbmode_exit_cb_t on_exit)
         return false;
     }
 
-    ESP_LOGI(TAG, "GB start: %s (%u KB ROM, %u B cart RAM)",
-             rom_path, (unsigned)(rom_size / 1024), (unsigned)save_size);
+    // Baseline-mérés a hangolási létrához: a forró állapot (~48 KB WRAM+VRAM)
+    // belső SRAM-ba emelése csak akkor opció, ha itt van rá egybefüggő hely.
+    ESP_LOGI(TAG, "heap: belső szabad=%u legnagyobb blokk=%u, PSRAM szabad=%u",
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+             (unsigned)heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
+    ESP_LOGI(TAG, "GB start: %s (%u KB ROM, %u B cart RAM, %s mód)",
+             rom_path, (unsigned)(rom_size / 1024), (unsigned)save_size,
+             G.gb->cgb.cgbMode ? "CGB" : "DMG");
     return true;
 }

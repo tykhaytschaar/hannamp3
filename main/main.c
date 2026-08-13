@@ -2,6 +2,7 @@
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_sleep.h"
+#include "driver/rtc_io.h"
 #include "nvs_flash.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -89,6 +90,12 @@ static void deep_sleep_wake_gate(void)
     for (int i = 0; i < 25; i++) {
         vTaskDelay(pdMS_TO_TICKS(20));
         if (gpio_get_level(PIN_BTN_UP) != 0) {
+            // Ugyanaz a recept, mint a player.c enter_deep_sleep-jében:
+            // RTC pull-up + élő RTC-periféria, különben a lebegő láb miatt
+            // azonnal újraébred (wake-loop).
+            rtc_gpio_pullup_en(PIN_BTN_UP);
+            rtc_gpio_pulldown_dis(PIN_BTN_UP);
+            esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
             esp_sleep_enable_ext1_wakeup_io(1ULL << PIN_BTN_UP, ESP_EXT1_WAKEUP_ANY_LOW);
             esp_deep_sleep_start();
         }

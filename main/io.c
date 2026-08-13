@@ -178,31 +178,6 @@ bool io_button_down(btn_event_t evt)
     return pin >= 0 && gpio_get_level(pin) == 0;
 }
 
-// IDEIGLENES: nyers gombállapot-logoló. Az iot_button mellett fut, a live
-// GPIO-szintet olvassa (a setup_button már pull-uppal inputra állította).
-static void btn_debug_task(void *arg)
-{
-    static const struct { int gpio; const char *name; } P[] = {
-        { PIN_BTN_UP, "Up" }, { PIN_BTN_DOWN, "Down" }, { PIN_BTN_LEFT, "Left" },
-        { PIN_BTN_RIGHT, "Right" }, { PIN_BTN_A, "A" }, { PIN_BTN_B, "B" },
-        { PIN_BTN_X, "X" }, { PIN_BTN_Y, "Y" },
-    };
-    int prev[8];
-    for (int i = 0; i < 8; i++) prev[i] = gpio_get_level(P[i].gpio);
-    ESP_LOGW(TAG, "BTN-DEBUG aktiv — nyomkodj gombokat, figyeld a logot");
-    while (1) {
-        for (int i = 0; i < 8; i++) {
-            int lv = gpio_get_level(P[i].gpio);
-            if (lv != prev[i]) {
-                ESP_LOGW(TAG, "%-6s GPIO %2d -> %s", P[i].name, P[i].gpio,
-                         lv ? "fel" : "LENYOMVA");
-                prev[i] = lv;
-            }
-        }
-        vTaskDelay(pdMS_TO_TICKS(30));
-    }
-}
-
 void io_init(void)
 {
     setup_button(PIN_BTN_A,     BTN_EVT_A,     false);
@@ -232,12 +207,6 @@ void io_init(void)
     }
 
     xTaskCreate(battery_task, "battery", 4096, NULL, 3, NULL);
-
-    // ---- IDEIGLENES gomb-diagnosztika ----
-    // Nyers GPIO-szint pollozás mind a 8 gombra, váltáskor logol. Megkerüli az
-    // iot_button-t → eldönti, hogy a Bal/Jobb (GPIO 2/1) láb reagál-e (FW), vagy
-    // a vezeték a hibás (HW). Mérés után törlendő.
-    xTaskCreate(btn_debug_task, "btndbg", 3072, NULL, 3, NULL);
 }
 
 void io_register_button_cb(btn_cb_t cb)   { s_btn_cb  = cb; }

@@ -48,6 +48,17 @@ static void cli_dispatch(const char *cmd, const char *param)
         return;
     }
 
+    // GB hangolási A/B-kapcsolók — játék közben is (sőt főleg akkor) kellenek,
+    // ezért a gomb-mapping ELŐTT.
+    if (strcmp(cmd, "gbcore") == 0) {
+        gbmode_toggle_core();
+        return;
+    }
+    if (strcmp(cmd, "gbfs") == 0) {
+        gbmode_cycle_render_mode();
+        return;
+    }
+
     // GB mode: a gombokra kötött parancsok a játék kulcsait ütik (rövid
     // szimulált tap) — a player ilyenkor nem kap eseményt.
     if (gbmode_is_active()) {

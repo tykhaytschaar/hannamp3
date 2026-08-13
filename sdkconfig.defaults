@@ -74,3 +74,13 @@ CONFIG_TINYUSB_MSC_BUFSIZE=8192
 # Teljesítmény-optimalizált fordítás (-O2) — a GB-emulációnak és az
 # MP3-dekódernek is számít; flash-hely bőven van.
 CONFIG_COMPILER_OPTIMIZATION_PERF=y
+
+# GB/GBC emulátor: 32 KB utasítás-cache (a Walnut-CGB dispatch-kódja flashből
+# fut, a 16 KB-os icache szűk neki). A 16 KB-nyi belső RAM-ot az LVGL
+# flush-buffer 40->24 sorra csökkentése teremti elő (ui.c) — e nélkül a
+# buf2-alloc bootkor elhasal!
+CONFIG_ESP32S3_INSTRUCTION_CACHE_32KB=y
+
+# Bootloader-log Warning szintre: deep sleep-ből minden ébredés(-kísérlet)
+# teljes boot — INFO szinten ~30 sor UART-forgalom (LED + fogyasztás).
+CONFIG_BOOTLOADER_LOG_LEVEL_WARN=y

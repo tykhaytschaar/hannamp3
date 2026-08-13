@@ -17,8 +17,8 @@
 #include "player.h"
 #include "mp3_fonts.h"
 
-// A Settings → Games képernyő: a GAMES_DIR Game Boy (.gb) ROM-jainak
-// választólistája. Tap egy soron → player_launch_game() → gb.c. Maga az
+// A Settings → Games képernyő: a GAMES_DIR Game Boy / Game Boy Color
+// (.gb/.gbc) ROM-jainak választólistája. Tap egy soron → player_launch_game() → gb.c. Maga az
 // emuláció és a játékképernyő a gb.c-ben él; itt csak a picker van.
 
 // Theme tokenek — az ui.c-vel egyező értékek (ott file-local makrók).
@@ -34,7 +34,7 @@
 // --- Game picker állapot ---
 static struct {
     lv_obj_t    *scr;
-    dir_entry_t *entries;          // csak a .gb sorok (előre tömörítve)
+    dir_entry_t *entries;          // csak a .gb/.gbc sorok (előre tömörítve)
     int          count;
     char         pending[MAX_PATH_LEN];   // tap után indítandó ROM útvonala
 } P;
@@ -179,7 +179,7 @@ void game_show_picker(void)
 
     if (P.count == 0) {
         lv_obj_t *empty = lv_list_add_text(list,
-            "Nincs játék.\nMásolj .gb ROM-okat ide: " GAMES_DIR " az SD kártyán.");
+            "Nincs játék.\nMásolj .gb/.gbc ROM-okat ide: " GAMES_DIR " az SD kártyán.");
         lv_obj_set_style_text_color(empty, COL_TEXT_DIM, 0);
     }
     for (int i = 0; i < P.count; i++) {
