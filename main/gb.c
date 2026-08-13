@@ -23,8 +23,7 @@
 
 // Walnut-CGB: single-header DMG+CGB emulátor (a Peanut-GB teljesítmény-
 // orientált újraírása), az implementáció EBBE a fordítási egységbe kerül
-// (máshol nem includolható implementációval). A korábbi peanut_gb.h (csak
-// DMG) rollback-hálóként a fában marad a hardveres CGB-igazolásig.
+// (máshol nem includolható implementációval).
 // HIGH_LCD_ACCURACY=1: a Peanut-os buildben 0 volt (gyorsabb render), de a
 // Walnut CGB-módjában a gyorsított sprite-út hibagyanús (SMB Deluxe: eltűnő
 // karakter-sprite) — amíg ez nem tisztázott, a pontos út megy. Ha a HW-teszt
