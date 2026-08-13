@@ -241,7 +241,11 @@ void ui_init(void)
     const lvgl_port_display_cfg_t disp_cfg = {
         .io_handle = io_handle,
         .panel_handle = panel,
-        .buffer_size = LCD_H_RES * 40,
+        // 24 sor (korábban 40): a 2×(480×24×2 B) = 46 KB belső DMA-buffer
+        // 30,7 KB-tal kevesebb, mint a 40 soros — ebből fér ki a 32 KB-os
+        // utasítás-cache (GB emulátor-gyorsítás). Teljes flush: 14 sáv 8
+        // helyett; a sávnyi SPI-átvitel sebessége változatlan.
+        .buffer_size = LCD_H_RES * 24,
         .double_buffer = true,
         .hres = LCD_H_RES,
         .vres = LCD_V_RES,
