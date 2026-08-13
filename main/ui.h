@@ -62,12 +62,12 @@ void ui_spi_lock(void);
 void ui_spi_unlock(void);
 
 // -----------------------------------------------------------------------------
-// Multi-screen API — Now Playing / Library / Settings
+// Multi-screen API — Lejátszás / Könyvtár / Játékok / Rendszer
 // -----------------------------------------------------------------------------
 //
-// A három képernyő közti váltás touch swipe-pal történik:
-//   - swipe left  → ui_next_screen()  (Now → Library → Settings → Now)
-//   - swipe right → ui_prev_screen()
+// A képernyők közti váltás a header nyíl-gombjaival történik:
+//   - jobb nyíl → ui_next_screen()  (Lejátszás → Könyvtár → Játékok → Rendszer → …)
+//   - bal nyíl  → ui_prev_screen()
 // A MENU gomb short press már nem cikláltatja a képernyőket (csak a long
 // press maradt = SD rescan a player.c-ben).
 //
@@ -80,7 +80,8 @@ void ui_spi_unlock(void);
 typedef enum {
     UI_SCREEN_NOW_PLAYING = 0,
     UI_SCREEN_LIBRARY,
-    UI_SCREEN_SETTINGS,
+    UI_SCREEN_GAMES,      // Game Boy ROM-lista (tartalom: game.c) — GB-kilépés ide esik vissza
+    UI_SCREEN_SETTINGS,   // kijelzett neve: "RENDSZER"
     UI_SCREEN_COUNT
 } ui_screen_t;
 

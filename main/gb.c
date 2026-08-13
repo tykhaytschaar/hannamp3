@@ -397,7 +397,9 @@ static void do_exit(void)
     lv_timer_set_period(lv_display_get_refr_timer(lv_display_get_default()),
                         CONFIG_LV_DEF_REFR_PERIOD);
     lv_obj_remove_flag(lv_layer_top(), LV_OBJ_FLAG_HIDDEN);
-    ui_show_screen(ui_current_screen());
+    // Kilépés után mindig a Játékok oldalra esünk vissza — akkor is, ha a
+    // ROM-ot a Libraryből indítottuk.
+    ui_show_screen(UI_SCREEN_GAMES);
     lv_image_cache_drop(&G.dsc);
     lv_obj_delete(G.scr);
     G.scr = NULL;

@@ -26,7 +26,7 @@
 #include "boot_splash.h"
 #include "usb_msc.h"  // usb_msc_request_reboot (Settings → USB Storage gomb)
 #include "cover_art.h"
-#include "game.h"     // game_show_picker (Settings → Games gomb)
+#include "game.h"     // Játékok oldal tartalma (game_screen_create/refresh)
 
 static const char *TAG = "ui";
 
@@ -271,6 +271,7 @@ void ui_init(void)
     build_overlay();
     build_now_playing();
     build_library();
+    game_screen_create(U.scr[UI_SCREEN_GAMES]);   // Játékok oldal tartalma: game.c
     build_settings();
 
     U.current = UI_SCREEN_NOW_PLAYING;
@@ -428,8 +429,8 @@ static void build_overlay(void)
 
     // Oldalváltó nyilak az oldalnév két oldalán (a swipe-ot váltják). Fix
     // offsetre a képernyő-középtől, nem a chiphez igazítva: az oldalnév
-    // hossza váltáskor változik ("KÖNYVTÁR" ↔ "BEÁLLÍTÁSOK"), a nyilak
-    // maradjanak helyben. ±78 px: a leghosszabb név ("BEÁLLÍTÁSOK") mellett
+    // hossza váltáskor változik ("KÖNYVTÁR" ↔ "LEJÁTSZÁS"), a nyilak
+    // maradjanak helyben. ±78 px: a leghosszabb név ("LEJÁTSZÁS") mellett
     // is marad rés. A glyph kicsi — kiterjesztett találati zóna kell, hogy
     // ujjal kényelmes legyen; a zónák a fix offset mellett sem érnek össze.
     for (int dir = -1; dir <= 1; dir += 2) {
@@ -486,7 +487,7 @@ static void build_overlay(void)
 
 static void update_screen_chip(void)
 {
-    static const char *labels[UI_SCREEN_COUNT] = { "LEJÁTSZÁS", "KÖNYVTÁR", "BEÁLLÍTÁSOK" };
+    static const char *labels[UI_SCREEN_COUNT] = { "LEJÁTSZÁS", "KÖNYVTÁR", "JÁTÉKOK", "RENDSZER" };
     if (!U.ovr_screen_chip) return;
     lv_label_set_text(U.ovr_screen_chip, labels[U.current]);
 }
@@ -631,7 +632,7 @@ static void build_library(void)
 }
 
 // -----------------------------------------------------------------------------
-// Screen 3: Settings — read-only status panel
+// Screen 4: Settings — kijelzett neve "RENDSZER" (fényerő/alvás/USB stb.)
 // -----------------------------------------------------------------------------
 // Volume slider (header): drag közben realtime (NEM perzisztál — a mid-drag
 // flash-írás megakasztaná az audiót), elengedéskor NVS-mentés. Alvó kijelzőn
@@ -756,14 +757,6 @@ static void usb_storage_row_click(lv_event_t *e)
     usb_msc_request_reboot();   // sosem tér vissza
 }
 
-// Games gomb tap → Game Boy ROM-picker (game.c). Alvó kijelzőn csak ébreszt.
-static void games_row_click(lv_event_t *e)
-{
-    (void)e;
-    if (ui_user_activity()) return;
-    game_show_picker();
-}
-
 static lv_obj_t *settings_row(lv_obj_t *parent, const char *icon, const char *label,
                               lv_obj_t **out_value)
 {
@@ -824,22 +817,6 @@ static void build_settings(void)
     // a highlight megszűnt, az indent marad.)
     for (int i = 0; i < UI_SETTING_COUNT; i++) {
         if (U.set_row[i]) lv_obj_set_style_pad_left(U.set_row[i], 12, LV_PART_MAIN);
-    }
-
-    // Games — gomb (akció): a /sdcard/games Game Boy ROM-jainak választólistája
-    // (game.c picker). Stílusban az USB Storage gomb párja.
-    {
-        lv_obj_t *btn = lv_button_create(panel);
-        lv_obj_set_size(btn, lv_pct(100), 36);
-        lv_obj_set_style_bg_color(btn, COL_BG_PANEL_2, LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_radius(btn, 8, LV_PART_MAIN);
-        lv_obj_set_style_shadow_width(btn, 0, LV_PART_MAIN);
-        lv_obj_add_event_cb(btn, games_row_click, LV_EVENT_CLICKED, NULL);
-        lv_obj_t *lbl = lv_label_create(btn);
-        lv_obj_set_style_text_color(lbl, COL_ACCENT, 0);
-        lv_label_set_text(lbl, "Játékok");
-        lv_obj_center(lbl);
     }
 
     // USB Storage — gomb (akció, nem beállítás): koppintásra újraindul USB MSC
@@ -1079,6 +1056,12 @@ void ui_show_screen(ui_screen_t s)
 {
     if (s >= UI_SCREEN_COUNT) return;
     lvgl_port_lock(0);
+    // A Játékok oldalra BELÉPÉSKOR frissül a ROM-lista az SD-ről (a lock alatt
+    // — közös SPI busz). GB-kilépés után ide esünk vissza; ha a játékot innen
+    // indítottuk, U.current már GAMES, így nincs felesleges újra-szkennelés.
+    if (s == UI_SCREEN_GAMES && U.current != UI_SCREEN_GAMES) {
+        game_screen_refresh();
+    }
     U.current = s;
     lv_screen_load(U.scr[s]);
     update_screen_chip();
@@ -1198,9 +1181,8 @@ void ui_show_no_track(void)
 }
 
 // Rövid, magától eltűnő hibajelzés/üzenet a képernyő alján. A SYS layeren ül
-// (nem a top layeren!): azt a játékmód/picker sem rejti el, így a save
-// state visszajelzései játék közben is látszanak. Újabb toast a régit
-// lecseréli.
+// (nem a top layeren!): azt a játékmód sem rejti el, így a save state
+// visszajelzései játék közben is látszanak. Újabb toast a régit lecseréli.
 static lv_obj_t *s_toast;
 
 static void toast_expire_cb(lv_timer_t *t)

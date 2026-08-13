@@ -6,9 +6,9 @@
 
 // Game Boy / Game Boy Color mód — Walnut-CGB emulátormag
 // (main/walnut_cgb.h, MIT) + LVGL megjelenítés. A .gb/.gbc ROM-okat a
-// player_launch_game() irányítja ide (kiterjesztés szerint); a
-// picker/Settings-integráció közös a CHIP-8-cal. CGB-kompatibilis .gb
-// (header 0x143 bit7) automatikusan színesben fut.
+// player_launch_game() irányítja ide (kiterjesztés szerint); a ROM-lista a
+// Játékok oldalon él (game.c). CGB-kompatibilis .gb (header 0x143 bit7)
+// automatikusan színesben fut. Kilépéskor a Játékok oldalra térünk vissza.
 //
 // Architektúra: az emuláció saját FreeRTOS taskban fut az 1-es magon
 // (az LVGL a 0-son), valós idejű ~59,7 fps-sel, PSRAM-beli dupla

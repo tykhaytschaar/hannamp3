@@ -371,9 +371,9 @@ void player_handle_button(btn_event_t evt)
 
     switch (evt) {
     case BTN_EVT_A:
-        if (scr == UI_SCREEN_SETTINGS) {
-            // A Settings oldalon a PLAY semmit nem csinál — ne indítson zenét
-            // és ne legyen mentés-funkció sem (az érték állítás auto-save).
+        if (scr == UI_SCREEN_SETTINGS || scr == UI_SCREEN_GAMES) {
+            // A Rendszer és a Játékok oldalon a PLAY semmit nem csinál — ne
+            // indítson zenét (mindkét oldal touch-vezérelt).
             break;
         }
         if (scr == UI_SCREEN_LIBRARY) {
@@ -392,9 +392,9 @@ void player_handle_button(btn_event_t evt)
 
     case BTN_EVT_RIGHT:
     case BTN_EVT_LEFT: {
-        if (scr == UI_SCREEN_SETTINGS) {
-            // Settings touch-vezérelt (sliderek + tap-cycle sorok) — a
-            // Next/Prev gombnak itt nincs funkciója.
+        if (scr == UI_SCREEN_SETTINGS || scr == UI_SCREEN_GAMES) {
+            // A Rendszer (sliderek + tap-cycle sorok) és a Játékok oldal
+            // touch-vezérelt — a Next/Prev gombnak itt nincs funkciója.
             break;
         }
         if (scr == UI_SCREEN_LIBRARY) {
