@@ -131,7 +131,7 @@ typedef struct {
     lv_obj_t *set_val_album_end;
     lv_obj_t *set_sld_backlight;  // Settings brightness slider
     // Settings widgets — szerkeszthető sorok (kurzor + edit highlight ide kerül)
-    lv_obj_t *set_row[UI_SETTING_COUNT];   // [VOLUME], [IDLE_TIMEOUT]
+    lv_obj_t *set_row[UI_SETTING_COUNT];   // ui_setting_t szerint indexelve
 
     // Now Playing mini-lista adatai (a játszó album, player.c birtokolja)
     const track_t *lib_tracks;
@@ -283,9 +283,8 @@ void ui_init(void)
 }
 
 // -----------------------------------------------------------------------------
-// Touch bring-up (0. fázis) — FT6336 kapacitív, külön I2C busz, polling.
-// Egyelőre csak az LVGL pointer-indev-et regisztrálja + debug-logolja a
-// press-koordinátákat. A widget-ekre kötött viselkedés az 1. fázis.
+// Touch — FT6336 kapacitív, külön I2C busz, polling (nincs INT láb). Az LVGL
+// pointer-indev-et regisztrálja; a viselkedést a widget-eventek kezelik.
 // -----------------------------------------------------------------------------
 #define TOUCH_I2C_PORT   I2C_NUM_0
 #define TOUCH_I2C_HZ     400000
@@ -383,8 +382,8 @@ static void apply_screen_bg(lv_obj_t *scr)
     // Default font az egész screen-en — minden label örökli, kivéve ahol
     // explicit font van beállítva (title 24, subtitle 18).
     lv_obj_set_style_text_font(scr, &mp3_inter_14, LV_PART_MAIN);
-    // A screen ne scrollozzon — különben a vízszintes touch swipe-ot a
-    // scroll-engine fogja el, és nem érne el a LV_EVENT_GESTURE-höz.
+    // A screen ne scrollozzon — egy véletlen vízszintes húzás ne mozdítsa el
+    // a képernyő tartalmát (a képernyőváltás a header nyilaival történik).
     // A lib_list és más belső scrollozható widgetek ettől függetlenek.
     lv_obj_remove_flag(scr, LV_OBJ_FLAG_SCROLLABLE);
 }
@@ -401,8 +400,8 @@ static lv_obj_t *make_panel(lv_obj_t *parent)
 }
 
 // -----------------------------------------------------------------------------
-// Persistent overlay (screen chip felül balra, battery felül jobbra)
-// Mind a három képernyőn látszik, mert lv_layer_top()-on van.
+// Persistent overlay (hangerő felül balra, oldalnév + nyilak középen,
+// battery felül jobbra). Minden képernyőn látszik, mert lv_layer_top()-on van.
 // -----------------------------------------------------------------------------
 static void build_overlay(void)
 {
@@ -553,7 +552,7 @@ static void build_now_playing(void)
     lv_obj_align(U.np_lbl_title, LV_ALIGN_TOP_LEFT, 184, 36);
     lv_obj_set_style_text_font(U.np_lbl_title, &mp3_inter_24, 0);
     lv_obj_set_style_text_color(U.np_lbl_title, COL_TEXT, 0);
-    lv_label_set_text(U.np_lbl_title, "—");
+    lv_label_set_text(U.np_lbl_title, "-");
 
     U.np_lbl_subtitle = lv_label_create(scr);
     lv_label_set_long_mode(U.np_lbl_subtitle, LV_LABEL_LONG_DOT);
@@ -757,6 +756,142 @@ static void usb_storage_row_click(lv_event_t *e)
     usb_msc_request_reboot();   // sosem tér vissza
 }
 
+// -----------------------------------------------------------------------------
+// Használati útmutató — a Rendszer oldal gombjáról nyíló, görgethető szöveg.
+// Ad-hoc screen (nem része az oldal-rotációnak): saját fejléce van Vissza
+// gombbal, a közös overlay (nyilak/chip) addig rejtve. Bezáráskor a Rendszer
+// oldalra térünk vissza. A szöveg a firmware-be fordul (flash, text_static).
+// -----------------------------------------------------------------------------
+static lv_obj_t *s_manual_scr;
+
+// Szakaszonként cím + törzs: a cím accent színű külön label (ebben az LVGL
+// buildben nincs lv_label_set_recolor). Új funkciónál ezt is frissítsd!
+static const struct { const char *title; const char *body; } MANUAL[] = {
+    { "FELÉPÍTÉS",
+      "A fejléc nyilaival lapozhatsz a négy oldal között: Lejátszás, Könyvtár, "
+      "Játékok, Rendszer. A fejlécben mindig elérhető a hangerő-csúszka "
+      "(balra), középen az oldal neve, jobbra az akku töltöttsége." },
+    { "LEJÁTSZÁS",
+      "Az aktuális szám címe, előadója és albumképe, alatta a folyamatjelző. "
+      "Képernyő-gombok: előző, lejátszás/szünet, stop, következő. Alul az "
+      "album számlistája - koppints egy sorra az indításhoz." },
+    { "KÖNYVTÁR",
+      "Az SD-kártya music mappájának böngészője. Mappára koppintva belépsz; "
+      "fájlra koppintva a mappa lesz a lejátszási lista, és a kiválasztott "
+      "szám indul. A \"..\" sor a szülőmappába lép vissza, a \"Play all\" a mappa "
+      "összes számát elölről indítja. Az .m3u playlist a saját sorrendjében "
+      "játszik; a .gb/.gbc fájl játékként indul." },
+    { "JÁTÉKOK",
+      "Az SD-kártya games mappájában lévő Game Boy / Game Boy Color ROM-ok - "
+      "koppintásra indul, a zene leáll. Irányítás a D-paddal és az A/B "
+      "gombokkal; X = Start, Y = Select (touchról is elérhetők). Bal sáv: "
+      "Mentés/Betöltés (pillanatkép) és Kilépés - kilépéskor a Játékok "
+      "oldalra térsz vissza. A játék saját (elemes) mentése megmarad; a "
+      "pillanatkép firmware-frissítéskor érvényét veszti." },
+    { "RENDSZER",
+      "Fényerő: csúszka. Kijelző ki: ennyi tétlenség után sötétül el a "
+      "kijelző (koppintásra vált: 10/15/30 mp/soha). Alvás: bekapcsolva a "
+      "lejátszó 1 perc tétlenség után - ha nem szól zene - mély alvásba "
+      "megy; a Fel gomb nyomva tartása ébreszti. Album vége: mi történjen a "
+      "lista utolsó száma után (Stop / Ismétlés / Következő album). USB "
+      "tároló: a lejátszó újraindul, és az SD-kártya meghajtóként jelenik "
+      "meg a számítógépen - előbb válaszd le a meghajtót, majd lépj ki a "
+      "képernyőn lévő gombbal." },
+    { "GOMBOK",
+      "A: lejátszás/szünet. Bal/Jobb: előző/következő szám. Fel/Le: hangerő. "
+      "A Könyvtárban: Fel/Le = kurzor, Jobb = belépés, Bal = vissza, "
+      "A = indítás. Ha a kijelző sötét, az első gombnyomás vagy koppintás "
+      "csak felébreszti - a funkció nem fut le." },
+};
+
+// Bezárás — async: az esemény forrás-gombjával együtt törölnénk a screent
+// (use-after-free), ezért a tényleges lebontás LVGL async hívásból fut.
+static void manual_close_async(void *p)
+{
+    (void)p;
+    if (!s_manual_scr) return;
+    lvgl_port_lock(0);
+    lv_obj_remove_flag(lv_layer_top(), LV_OBJ_FLAG_HIDDEN);
+    ui_show_screen(ui_current_screen());   // vissza a Rendszer oldalra
+    lv_obj_delete(s_manual_scr);
+    s_manual_scr = NULL;
+    lvgl_port_unlock();
+}
+
+static void manual_back_click(lv_event_t *e)
+{
+    (void)e;
+    if (ui_user_activity()) return;
+    lv_async_call(manual_close_async, NULL);
+}
+
+// "Használati útmutató" gomb tap (Rendszer oldal) → az útmutató-screen
+// felépítése és betöltése. Alvó kijelzőn csak ébreszt.
+static void manual_btn_click(lv_event_t *e)
+{
+    (void)e;
+    if (ui_user_activity()) return;
+    if (s_manual_scr) return;
+
+    lvgl_port_lock(0);
+    lv_obj_add_flag(lv_layer_top(), LV_OBJ_FLAG_HIDDEN);
+
+    s_manual_scr = lv_obj_create(NULL);
+    apply_screen_bg(s_manual_scr);
+
+    // Fejléc: Vissza gomb + cím (az overlay rejtve, ezért kell saját).
+    lv_obj_t *hdr = lv_obj_create(s_manual_scr);
+    lv_obj_remove_style_all(hdr);
+    lv_obj_set_size(hdr, LCD_H_RES, 64);
+    lv_obj_set_pos(hdr, 0, 0);
+    lv_obj_set_style_bg_color(hdr, COL_BG_PANEL, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(hdr, LV_OPA_COVER, LV_PART_MAIN);
+
+    lv_obj_t *btn = lv_button_create(hdr);
+    lv_obj_set_size(btn, 110, 44);
+    lv_obj_align(btn, LV_ALIGN_LEFT_MID, 10, 0);
+    lv_obj_set_style_bg_color(btn, COL_BG_PANEL_2, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(btn, 8, LV_PART_MAIN);
+    lv_obj_set_style_shadow_width(btn, 0, LV_PART_MAIN);
+    lv_obj_add_event_cb(btn, manual_back_click, LV_EVENT_CLICKED, NULL);
+    // Font: a screen-default mp3_inter_14 öröklődik — így a fejléc mérete
+    // egyezik a többi oldal overlay-chipjével.
+    lv_obj_t *bl = lv_label_create(btn);
+    lv_obj_set_style_text_color(bl, COL_ACCENT, 0);
+    lv_label_set_text(bl, LV_SYMBOL_LEFT "  Vissza");
+    lv_obj_center(bl);
+
+    lv_obj_t *title = lv_label_create(hdr);
+    lv_obj_set_style_text_color(title, COL_ACCENT, 0);
+    lv_label_set_text(title, "ÚTMUTATÓ");
+    lv_obj_align(title, LV_ALIGN_CENTER, 0, 0);
+
+    // Görgethető szövegpanel (a make_panel scrollozható marad, ha túlcsordul).
+    lv_obj_t *panel = make_panel(s_manual_scr);
+    lv_obj_set_size(panel, 456, LCD_V_RES - 64 - 24);
+    lv_obj_align(panel, LV_ALIGN_TOP_LEFT, 12, 64 + 12);
+    lv_obj_set_style_pad_all(panel, 12, LV_PART_MAIN);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_style_pad_row(panel, 6, LV_PART_MAIN);
+    lv_obj_set_scroll_dir(panel, LV_DIR_VER);
+
+    for (size_t i = 0; i < sizeof(MANUAL) / sizeof(MANUAL[0]); i++) {
+        lv_obj_t *sec = lv_label_create(panel);
+        lv_obj_set_style_text_color(sec, COL_ACCENT, 0);
+        if (i) lv_obj_set_style_pad_top(sec, 10, LV_PART_MAIN);
+        lv_label_set_text_static(sec, MANUAL[i].title);
+
+        lv_obj_t *body = lv_label_create(panel);
+        lv_obj_set_width(body, lv_pct(100));
+        lv_label_set_long_mode(body, LV_LABEL_LONG_WRAP);
+        lv_label_set_text_static(body, MANUAL[i].body);
+    }
+
+    lv_screen_load(s_manual_scr);
+    lvgl_port_unlock();
+}
+
 static lv_obj_t *settings_row(lv_obj_t *parent, const char *icon, const char *label,
                               lv_obj_t **out_value)
 {
@@ -777,7 +912,7 @@ static lv_obj_t *settings_row(lv_obj_t *parent, const char *icon, const char *la
     lv_obj_set_style_text_color(left, COL_TEXT_DIM, 0);
 
     lv_obj_t *val = lv_label_create(row);
-    lv_label_set_text(val, "—");
+    lv_label_set_text(val, "-");
     lv_obj_set_style_text_color(val, COL_TEXT, 0);
     if (out_value) *out_value = val;
     return row;
@@ -833,6 +968,21 @@ static void build_settings(void)
         lv_obj_t *lbl = lv_label_create(btn);
         lv_obj_set_style_text_color(lbl, COL_ACCENT, 0);
         lv_label_set_text(lbl, "USB tároló");
+        lv_obj_center(lbl);
+    }
+
+    // Használati útmutató — gomb: görgethető súgó-screen (MANUAL_TEXT).
+    {
+        lv_obj_t *btn = lv_button_create(panel);
+        lv_obj_set_size(btn, lv_pct(100), 36);
+        lv_obj_set_style_bg_color(btn, COL_BG_PANEL_2, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(btn, 8, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(btn, 0, LV_PART_MAIN);
+        lv_obj_add_event_cb(btn, manual_btn_click, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *lbl = lv_label_create(btn);
+        lv_obj_set_style_text_color(lbl, COL_ACCENT, 0);
+        lv_label_set_text(lbl, "Használati útmutató");
         lv_obj_center(lbl);
     }
     if (U.set_val_idle)      idle_label_refresh_locked();   // induló értékek
