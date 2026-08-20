@@ -4,6 +4,7 @@ build
 sdkconfig
 sdkconfig.old
 managed_components
+games
 *.log
 .DS_Store
 /**/__pycache__
