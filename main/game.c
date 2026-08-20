@@ -36,12 +36,32 @@ static struct {
     char         pending[MAX_PATH_LEN];   // tap után indítandó ROM útvonala
 } P;
 
-// Fájlnév → kijelzett név (kiterjesztés nélkül; a csonkolás szándékos).
+// A list-gomb szöveg-labelje (az ikon image-ként jön létre, így az első
+// label a szöveg) — az ui.c list_btn_label párja.
+static lv_obj_t *list_btn_label(lv_obj_t *btn)
+{
+    uint32_t n = lv_obj_get_child_count(btn);
+    for (uint32_t i = 0; i < n; i++) {
+        lv_obj_t *c = lv_obj_get_child(btn, i);
+        if (lv_obj_check_type(c, &lv_label_class)) return c;
+    }
+    return NULL;
+}
+
+// Fájlnév → kijelzett név (kiterjesztés nélkül). A hosszú neveket MI
+// csonkoljuk "..."-ra, hogy a label sose csorduljon túl a soron: az LVGL 9.2
+// overflow-kezelése a flex-es listasorban túlfutó szövegnél végtelen
+// újra-layout/újrarajzolás ciklusba tud esni (SCROLL_CIRCULAR és LONG_DOT
+// módban is ugyanez volt a fagyás — task_wdt a taskLVGL-en).
+#define ROM_NAME_MAX_CHARS 48   // mp3_inter_14 mellett bőven belefér a 456px-be
 static void rom_display_name(const char *fname, char *out, size_t n)
 {
     strlcpy(out, fname, n);
     char *dot = strrchr(out, '.');
     if (dot) *dot = 0;
+    if (strlen(out) > ROM_NAME_MAX_CHARS && n > ROM_NAME_MAX_CHARS + 3) {
+        strcpy(out + ROM_NAME_MAX_CHARS, "...");
+    }
 }
 
 // ROM-sor tap (async): útvonal kimásolása + indítás a player-en át
@@ -108,6 +128,11 @@ void game_screen_refresh(void)
         char name[64];
         rom_display_name(P.entries[i].name, name, sizeof(name));
         lv_obj_t *btn = lv_list_add_button(P.list, LV_SYMBOL_PLAY, name);
+        // CLIP: se görgő animáció (SCROLL_CIRCULAR default), se dot-csere —
+        // mindkettő végtelen redraw-ba vitte a taskLVGL-t a hosszú neveknél.
+        // A név amúgy sem érheti el a sorszélt (rom_display_name csonkol).
+        lv_obj_t *lbl = list_btn_label(btn);
+        if (lbl) lv_label_set_long_mode(lbl, LV_LABEL_LONG_CLIP);
         lv_obj_set_style_border_width(btn, 0, LV_PART_MAIN);
         lv_obj_set_style_bg_opa(btn, LV_OPA_TRANSP, LV_PART_MAIN);
         lv_obj_set_style_text_color(btn, COL_TEXT, LV_PART_MAIN);
