@@ -25,12 +25,12 @@ bool gbmode_start(const char *rom_path, gbmode_exit_cb_t on_exit);
 // true, amíg a GB mód aktív (screen + task él).
 bool gbmode_is_active(void);
 
-// Kilépés kérése bármely kontextusból (Menu gomb / Exit touch) — az
+// Kilépés kérése bármely kontextusból (Kilépés touch-gomb) — az
 // emulációs task a frame végén áll le, a lebontás az LVGL taskban fut.
 void gbmode_request_exit(void);
 
-// Gomb-esemény → rövid szimulált tap a GB joypadon (CLI-injektáláshoz,
-// amíg a B/Start/Select nincs bekötve). Nem game-gomb esemény → no-op.
+// Gomb-esemény → rövid szimulált tap a GB joypadon (CLI-injektáláshoz).
+// Nem game-gomb esemény → no-op.
 void gbmode_handle_button(btn_event_t evt);
 
 // Hangolási A/B-kapcsolók (CLI: ##gbcore## / ##gbfs##) — hatásuk az

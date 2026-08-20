@@ -48,6 +48,6 @@ void player_browser_up(void);
 // betöltése név-sorrendben + play az elsőtől + Now Playing. Alvón csak ébreszt.
 void player_browser_play_all(void);
 
-// Game Boy ROM indítása (a Játékok oldal listája és a Library .gb sora
+// Game Boy ROM indítása (a Játékok oldal listája és a Library .gb/.gbc sora
 // hívja). A zenét leállítja; a játékból kilépve nem folytatja.
 void player_launch_game(const char *path);

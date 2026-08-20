@@ -223,9 +223,10 @@ static bool list_is_single_folder(void)
 static bool advance_album(int dir, bool autoplay);
 
 // Játék indításakor a zene leáll (stop, nem pause — nincs automatikus
-// folytatás kilépéskor): a játék után a Play gomb a kiválasztott tracket
-// elölről indítja. Betöltési hibánál a lejátszáshoz nem nyúlunk.
-// Csak .gb ROM-ot indít — Game Boy mód (gb.c).
+// folytatás kilépéskor): kilépés után a Játékok oldalra kerülünk, és a
+// Lejátszás oldalra visszalépve a Play a kiválasztott tracket elölről
+// indítja. Betöltési hibánál a lejátszáshoz nem nyúlunk.
+// .gb/.gbc ROM-ot indít — Game Boy / Game Boy Color mód (gb.c).
 void player_launch_game(const char *path)
 {
     if (gbmode_is_active()) return;
@@ -449,8 +450,9 @@ void player_handle_button(btn_event_t evt)
             browser_move_cursor(-dir);   // VolUp = kurzor fel
             break;
         }
-        // Now Playing ÉS Settings: globális hangerő. (A Settings touch-vezérelt:
-        // a sliderek a sorokon; a gombok itt is csak a hangerőt állítják. A
+        // Now Playing, Játékok ÉS Rendszer: globális hangerő. (A Játékok és a
+        // Rendszer oldal touch-vezérelt — a Rendszerben a sliderek a sorokon —,
+        // a gombok itt is csak a hangerőt állítják. A
         // gombbal NEM perzisztálunk — a hold-repeat sok flash-írása megakasztaná
         // az audiót; a slider release-e menti a hangerőt.)
         uint8_t v = audio_get_volume();

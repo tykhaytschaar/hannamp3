@@ -51,9 +51,9 @@ static const char *TAG = "gb";
 #define COL_ACCENT      lv_color_hex(0x2EE6D6)
 
 // -----------------------------------------------------------------------------
-// Layout 480×320: bal oldalsáv (Exit + cím) | 320×288 játéktér | jobb
-// oldalsáv (B / Start / Select touch-gombok — a fizikai gombok bekötéséig
-// és mellett is használhatók).
+// Layout 480×320: bal oldalsáv (Kilépés + save state Mentés/Betöltés) |
+// 320×288 játéktér | jobb oldalsáv (Start / Select touch-gombok — kényelmi
+// kiegészítés a fizikai X/Y mellett).
 // -----------------------------------------------------------------------------
 #define GB_SCALE   2
 #define GB_OUT_W   (LCD_WIDTH * GB_SCALE)    // 320
@@ -105,13 +105,14 @@ static struct {
 } G;
 
 // Render-mód: mind ugyanazt a CPU-emulációt futtatja, a render-költség
-// különbözik. Adaptív a default: amíg a renderelt frame-ek gördülő
+// különbözik. A default a frameskip (lásd gbmode_start, user-döntés).
+// Az adaptív mód: amíg a renderelt frame-ek gördülő
 // emu-idő-átlaga belefér a frame-keretbe, minden frame teljesen renderelődik
 // (a sprite-villogtatás fázishelyesen látszik); ha túlcsordul (nehéz jelenet,
 // CGB double-speed), frameskipre vált — hiszterézissel, fázistörővel.
 // A fix módok A/B-összehasonlításhoz maradnak (CLI: ##gbfs## ciklus).
 enum {
-    GB_RM_ADAPTIVE = 0,    // teljes render, túlterhelésnél frameskip (default)
+    GB_RM_ADAPTIVE = 0,    // teljes render, túlterhelésnél frameskip
     GB_RM_FULL,            // mindig minden frame teljes render
     GB_RM_FRAMESKIP,       // mindig minden 2. frame (fázistörővel)
     GB_RM_INTERLACE,       // minden 2. sor / frame — sprite-villogtatásnál
