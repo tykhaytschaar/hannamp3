@@ -531,7 +531,12 @@ static bool advance_album(int dir, bool autoplay)
     dir_entry_t *sibs = heap_caps_calloc(MAX_DIR_ENTRIES, sizeof(dir_entry_t),
                                          MALLOC_CAP_SPIRAM);
     if (!sibs) return false;
+    // SD-elérés lock alatt: ez az útvonal a player_taskból (track vége,
+    // auto-next) is fut, azaz NEM user-akcióhoz kötött — a lock nélküli
+    // olvasás összeakadhat egy párhuzamos LVGL-flush-sal a közös SPI2 buszon.
+    ui_spi_lock();
     int n = sd_list_dir(parent, sibs, MAX_DIR_ENTRIES);
+    ui_spi_unlock();
 
     int cur = -1;
     for (int i = 0; i < n; i++) {
@@ -546,7 +551,10 @@ static bool advance_album(int dir, bool autoplay)
         char next_path[sizeof(s_bpath)];
         snprintf(next_path, sizeof(next_path), "%.255s/%.127s", parent, sibs[i].name);
         // Üres mappa nem bántja a betöltött listát (0 track = nem ír semmit).
+        // Lock alatt, mint fent — ID3-olvasás is fut minden fájlra.
+        ui_spi_lock();
         int cnt = sd_load_dir_tracks(next_path, s_tracks, MAX_TRACKS);
+        ui_spi_unlock();
         if (cnt > 0) {
             s_count = cnt;
             s_idx   = (dir > 0) ? 0 : cnt - 1;
@@ -732,5 +740,9 @@ void player_start(void)
         ui_set_state(AUDIO_STATE_STOPPED);
     }
 
-    xTaskCreate(player_task, "player", 4096, NULL, 4, NULL);
+    // 8 KB stack: a szám végi auto-next itt futtatja a teljes trackváltó
+    // láncot (ui_show_track → sd_find_album_art + JPEG-dekód, mini-lista
+    // rebuild, NVS-commit) — 4 KB-on ez canary-panicot (reboot) okozott.
+    // Kézi léptetésnél ugyanez az esp_timer (8 KB) / LVGL (16 KB) taskon fut.
+    xTaskCreate(player_task, "player", 8192, NULL, 4, NULL);
 }
