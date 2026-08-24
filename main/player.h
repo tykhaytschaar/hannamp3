@@ -22,6 +22,10 @@ void player_set_volume(uint8_t vol);
 // Settings tap-cycle sorok (touch): léptetés/váltás + NVS-mentés.
 void player_cycle_idle_timeout(void);   // "Display off" sor
 void player_toggle_sleep(void);         // "Sleep" sor
+
+// Azonnali kikapcsolás (Rendszer oldal gombja): DAC mute + deep sleep, ébredés
+// az Up gombbal. Nem tér vissza.
+void player_power_off(void);
 void player_cycle_album_end(void);      // "Album end" sor (Stop/Repeat/Next album)
 
 // Now Playing transport gombok (touch). A 4 akció a fizikai gombok útjára

@@ -749,6 +749,15 @@ static void album_end_row_click(lv_event_t *e)
 // USB Storage gomb tap → újraindulás USB MSC módba. Alvó kijelzőn csak ébreszt
 // (mint a többi akció), különben usb_msc_request_reboot() — ami beállítja a
 // boot-flaget és azonnal újraindít (nem tér vissza).
+// "Kikapcsolás" gomb tap → azonnali deep sleep (megerősítés nélkül — az Up
+// gombos 500 ms-os wake-gate miatt egy véletlen tap olcsó). Alvón csak ébreszt.
+static void power_off_row_click(lv_event_t *e)
+{
+    (void)e;
+    if (ui_user_activity()) return;
+    player_power_off();   // nem tér vissza
+}
+
 static void usb_storage_row_click(lv_event_t *e)
 {
     (void)e;
@@ -954,12 +963,19 @@ static void build_settings(void)
         if (U.set_row[i]) lv_obj_set_style_pad_left(U.set_row[i], 12, LV_PART_MAIN);
     }
 
-    // USB Storage — gomb (akció, nem beállítás): koppintásra újraindul USB MSC
-    // módba (az SD kártya külső meghajtóként a natív USB-n). Szöveg-only: a
-    // saját fontokban nincs USB-glyph.
+    // Akció-gombok egy sorban (fél-fél szélesség), hogy a panel görgetés
+    // nélkül kiférjen: USB Storage (reboot MSC módba — szöveg-only, a saját
+    // fontokban nincs USB-glyph) + Kikapcsolás (azonnali deep sleep).
     {
-        lv_obj_t *btn = lv_button_create(panel);
-        lv_obj_set_size(btn, lv_pct(100), 36);
+        lv_obj_t *row = lv_obj_create(panel);
+        lv_obj_remove_style_all(row);
+        lv_obj_set_size(row, lv_pct(100), LV_SIZE_CONTENT);
+        lv_obj_set_flex_flow(row, LV_FLEX_FLOW_ROW);
+        lv_obj_set_style_pad_column(row, 6, LV_PART_MAIN);
+
+        lv_obj_t *btn = lv_button_create(row);
+        lv_obj_set_size(btn, LV_SIZE_CONTENT, 36);
+        lv_obj_set_flex_grow(btn, 1);
         lv_obj_set_style_bg_color(btn, COL_BG_PANEL_2, LV_PART_MAIN);
         lv_obj_set_style_bg_opa(btn, LV_OPA_COVER, LV_PART_MAIN);
         lv_obj_set_style_radius(btn, 8, LV_PART_MAIN);
@@ -969,6 +985,20 @@ static void build_settings(void)
         lv_obj_set_style_text_color(lbl, COL_ACCENT, 0);
         lv_label_set_text(lbl, "USB tároló");
         lv_obj_center(lbl);
+
+        lv_obj_t *off = lv_button_create(row);
+        lv_obj_set_size(off, LV_SIZE_CONTENT, 36);
+        lv_obj_set_flex_grow(off, 1);
+        lv_obj_set_style_bg_color(off, COL_BG_PANEL_2, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(off, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(off, 8, LV_PART_MAIN);
+        lv_obj_set_style_shadow_width(off, 0, LV_PART_MAIN);
+        lv_obj_add_event_cb(off, power_off_row_click, LV_EVENT_CLICKED, NULL);
+        lv_obj_t *ol = lv_label_create(off);
+        lv_obj_set_style_text_color(ol, COL_ACCENT, 0);
+        // Szöveg-only: a saját fontokban nincs power-glyph (0xF011).
+        lv_label_set_text(ol, "Kikapcsolás");
+        lv_obj_center(ol);
     }
 
     // Használati útmutató — gomb: görgethető súgó-screen (MANUAL_TEXT).

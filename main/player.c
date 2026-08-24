@@ -500,6 +500,17 @@ static void enter_deep_sleep(void)
     esp_deep_sleep_start();
 }
 
+// Kézi kikapcsolás (Rendszer oldal "Kikapcsolás" gombja). Az auto-sleep csak
+// álló lejátszásnál sülhet el; ez lejátszás KÖZBEN is hívható, ezért a DAC-ot
+// előbb némítjuk (XSMT soft mute ~2.4 ms), hogy a deep sleepbe zuhanó I2S ne
+// pattanjon. Nem tér vissza; ébresztés az Up gombbal, mint az auto-sleepnél.
+void player_power_off(void)
+{
+    gpio_set_level(PIN_XSMT, 0);
+    vTaskDelay(pdMS_TO_TICKS(10));
+    enter_deep_sleep();
+}
+
 // "Album end: Next album" mód: a játszott album szomszédos testvérmappája
 // abc-sorrendben (dir = +1 következő / -1 előző, körbefordul), amiben van
 // lejátszható fájl — betölti, és előre lépve az ELSŐ, visszafelé az UTOLSÓ
