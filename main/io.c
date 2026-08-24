@@ -178,18 +178,13 @@ bool io_button_down(btn_event_t evt)
     return pin >= 0 && gpio_get_level(pin) == 0;
 }
 
-void io_init(void)
+// ADC1 oneshot a battery-hez. Idempotens: a low-battery boot-gate (main.c) a
+// teljes io_init ELŐTT hívja, hogy már a drága init-ek előtt mérhessen — az
+// io_init-ből újra hívva nem csinál semmit.
+void io_battery_adc_init(void)
 {
-    setup_button(PIN_BTN_A,     BTN_EVT_A,     false);
-    setup_button(PIN_BTN_B,     BTN_EVT_B,     false);
-    setup_button(PIN_BTN_X,     BTN_EVT_X,     false);
-    setup_button(PIN_BTN_Y,     BTN_EVT_Y,     false);
-    setup_button(PIN_BTN_RIGHT, BTN_EVT_RIGHT, false);
-    setup_button(PIN_BTN_LEFT,  BTN_EVT_LEFT,  false);
-    setup_button(PIN_BTN_UP,    BTN_EVT_UP,    true);    // hold = vol ramp
-    setup_button(PIN_BTN_DOWN,  BTN_EVT_DOWN,  true);
+    if (s_adc) return;
 
-    // ---- ADC1 oneshot a battery-hez ----
     adc_oneshot_unit_init_cfg_t u = { .unit_id = ADC_UNIT_1, .ulp_mode = ADC_ULP_MODE_DISABLE };
     ESP_ERROR_CHECK(adc_oneshot_new_unit(&u, &s_adc));
 
@@ -205,6 +200,20 @@ void io_init(void)
     if (e != ESP_OK) {
         ESP_LOGW(TAG, "ADC calibration unavailable (%s) — voltages will be approximate", esp_err_to_name(e));
     }
+}
+
+void io_init(void)
+{
+    setup_button(PIN_BTN_A,     BTN_EVT_A,     false);
+    setup_button(PIN_BTN_B,     BTN_EVT_B,     false);
+    setup_button(PIN_BTN_X,     BTN_EVT_X,     false);
+    setup_button(PIN_BTN_Y,     BTN_EVT_Y,     false);
+    setup_button(PIN_BTN_RIGHT, BTN_EVT_RIGHT, false);
+    setup_button(PIN_BTN_LEFT,  BTN_EVT_LEFT,  false);
+    setup_button(PIN_BTN_UP,    BTN_EVT_UP,    true);    // hold = vol ramp
+    setup_button(PIN_BTN_DOWN,  BTN_EVT_DOWN,  true);
+
+    io_battery_adc_init();
 
     xTaskCreate(battery_task, "battery", 4096, NULL, 3, NULL);
 }

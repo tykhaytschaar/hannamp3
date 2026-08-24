@@ -1594,6 +1594,54 @@ void ui_show_usb_mode_screen(bool have_card)
     lvgl_port_unlock();
 }
 
+// -----------------------------------------------------------------------------
+// Lemerült akku képernyő — a low-battery boot-gate (main.c) hívja, amikor a
+// töltöttség <= BAT_SHUTOFF_PCT és nem bootolunk tovább. Csak egy nagy, piros,
+// üres akku-ikon: a custom fontok akku-szimbóluma max 24 px, ezért az ikont
+// LVGL-objektumokból rajzoljuk (test-keret + pozitív pólus "bütyök").
+// A backlight felkapcsolását a hívó intézi (ui_display_ready).
+// -----------------------------------------------------------------------------
+void ui_show_low_battery(void)
+{
+    const lv_color_t red = lv_color_hex(0xE5484D);
+
+    lvgl_port_lock(0);
+    lv_obj_add_flag(lv_layer_top(), LV_OBJ_FLAG_HIDDEN);
+
+    lv_obj_t *scr = lv_obj_create(NULL);
+    apply_screen_bg(scr);   // sötét háttér + no-scroll + default font
+
+    // Akku-test: üres, csak vastag piros keret. A bütyök miatt 8 px-lel balra
+    // tolva, hogy a teljes forma legyen optikailag középen.
+    lv_obj_t *body = lv_obj_create(scr);
+    lv_obj_remove_style_all(body);
+    lv_obj_set_size(body, 168, 84);
+    lv_obj_align(body, LV_ALIGN_CENTER, -8, 0);
+    lv_obj_set_style_border_color(body, red, LV_PART_MAIN);
+    lv_obj_set_style_border_width(body, 7, LV_PART_MAIN);
+    lv_obj_set_style_radius(body, 12, LV_PART_MAIN);
+
+    lv_obj_t *nub = lv_obj_create(scr);
+    lv_obj_remove_style_all(nub);
+    lv_obj_set_size(nub, 12, 34);
+    lv_obj_align_to(nub, body, LV_ALIGN_OUT_RIGHT_MID, 4, 0);
+    lv_obj_set_style_bg_color(nub, red, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(nub, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(nub, 4, LV_PART_MAIN);
+
+    // Maradék-csík a test bal szélén: az "épp hogy nem nulla, de vége" jelzés.
+    lv_obj_t *sliver = lv_obj_create(body);
+    lv_obj_remove_style_all(sliver);
+    lv_obj_set_size(sliver, 10, 84 - 2 * 7 - 2 * 8);
+    lv_obj_align(sliver, LV_ALIGN_LEFT_MID, 8, 0);
+    lv_obj_set_style_bg_color(sliver, red, LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(sliver, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_set_style_radius(sliver, 3, LV_PART_MAIN);
+
+    lv_screen_load(scr);
+    lvgl_port_unlock();
+}
+
 // MSC alatt hívható (LVGL fagyasztva): közvetlenül a touch drivert olvassa
 // (I2C — a közös SPI buszt nem érinti), és igazat ad, ha az aktuális érintés
 // az Exit gomb területére esik. Az esp_lcd_touch a configban megadott

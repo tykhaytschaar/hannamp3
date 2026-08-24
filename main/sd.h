@@ -24,6 +24,11 @@ typedef struct {
     bool is_gb;       // true = .gb/.gbc Game Boy (Color) ROM (tap = GB mode, lásd gb.c)
 } dir_entry_t;
 
+// Csak a közös SPI busz inicializálása, SD-mount NÉLKÜL. Idempotens (a már
+// futó buszra INVALID_STATE = OK). A low-battery boot-ág használja: az
+// ui_init-hez kell a busz, de kártyára ott nincs szükség.
+esp_err_t sd_bus_init(void);
+
 // Inicializálja a közös SPI buszt + felmountolja az SD-t /sdcard alatt.
 // A spi bus host: SD_SPI_HOST — ezt használja a TFT is.
 void sd_init(void);

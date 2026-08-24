@@ -103,6 +103,45 @@ static void deep_sleep_wake_gate(void)
     // 500 ms-on át lenyomva — folytatás normál boot-tal.
 }
 
+// Lemerült akku boot-gate: ha a töltöttség <= BAT_SHUTOFF_PCT (1% ≈ 3.36 V),
+// nem bootolunk — csak egy üres-akku jelet mutatunk 3 mp-ig, majd vissza deep
+// sleepbe. Töltőn (TP4056) a mért feszültség megemelkedik, így USB-ről töltve
+// a gate nem szól közbe, a lejátszó normálisan indul. A sleepből az Up gomb
+// ébreszt (ugyanaz a recept, mint a player.c enter_deep_sleep-je): lemerülten
+// minden próbálkozás csak újra a 3 mp-es jelet adja.
+static void low_battery_gate(void)
+{
+    io_battery_adc_init();
+    uint16_t mv = io_read_battery_mv();
+    if (mv == 0) return;   // ADC-hiba — inkább bootolunk, mint téves lekapcsolás
+    if (io_battery_percent_from_mv(mv) > BAT_SHUTOFF_PCT) return;
+
+    ESP_LOGW(TAG, "battery %u mV <= %d%% — low-batt jel, majd deep sleep",
+             mv, BAT_SHUTOFF_PCT);
+
+    // A kijelzőhöz kell a közös SPI busz, de SD-mount itt fölösleges.
+    sd_bus_init();
+    ui_init();
+    ui_show_low_battery();
+    ui_display_ready();                 // flush bevárása + backlight fel
+    vTaskDelay(pdMS_TO_TICKS(3000));
+
+    // Backlight LOW-ra fogva sleep idejére (a LEDC deep sleepben elenged, a
+    // BLK lába derengene) — lásd player.c enter_deep_sleep kommentjét.
+    gpio_reset_pin(PIN_BL);
+    gpio_set_direction(PIN_BL, GPIO_MODE_OUTPUT);
+    gpio_set_level(PIN_BL, 0);
+    gpio_hold_en(PIN_BL);
+    gpio_deep_sleep_hold_en();
+
+    // RTC pull-up kell az Up lábra, különben lebeg és wake-loopol.
+    rtc_gpio_pullup_en(PIN_BTN_UP);
+    rtc_gpio_pulldown_dis(PIN_BTN_UP);
+    esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
+    esp_sleep_enable_ext1_wakeup_io(1ULL << PIN_BTN_UP, ESP_EXT1_WAKEUP_ANY_LOW);
+    esp_deep_sleep_start();
+}
+
 void app_main(void)
 {
     ESP_LOGI(TAG, "hannamp3 boot");
@@ -128,6 +167,9 @@ void app_main(void)
     if (usb_msc_boot_requested()) {
         usb_msc_run();
     }
+
+    // Lemerült akku? Akkor innen nem megyünk tovább — jel + deep sleep.
+    low_battery_gate();
 
     // Sorrend fontos: SD a SPI buszt is inicializálja, amit az UI újrahasznosít.
     sd_init();

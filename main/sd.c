@@ -20,9 +20,11 @@
 static const char *TAG = "sd";
 static sdmmc_card_t *s_card = NULL;
 
-void sd_init(void)
+// Közös SPI busz inicializálása (TFT is ezt használja). Idempotens: ha a busz
+// már fut, az INVALID_STATE nem hiba. Kártya-mount nélkül is hívható — a
+// low-battery boot-ág (main.c) csak a buszt kéri, hogy az ui_init rajzolhasson.
+esp_err_t sd_bus_init(void)
 {
-    // Közös SPI busz inicializálása (TFT is ezt használja).
     spi_bus_config_t buscfg = {
         .mosi_io_num = PIN_SPI_MOSI,
         .miso_io_num = PIN_SPI_MISO,
@@ -34,8 +36,16 @@ void sd_init(void)
     esp_err_t err = spi_bus_initialize(SD_SPI_HOST, &buscfg, SDSPI_DEFAULT_DMA);
     if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
         ESP_LOGE(TAG, "spi_bus_initialize: %s", esp_err_to_name(err));
-        return;
+        return err;
     }
+    return ESP_OK;
+}
+
+void sd_init(void)
+{
+    if (sd_bus_init() != ESP_OK) return;
+
+    esp_err_t err;
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SD_SPI_HOST;
@@ -69,21 +79,8 @@ void sd_init(void)
 
 sdmmc_card_t *sd_init_card_raw(void)
 {
-    // Közös SPI busz (a TFT is ezt használja). Ha már inicializált (pl. nem
-    // ez fut először), az INVALID_STATE rendben van.
-    spi_bus_config_t buscfg = {
-        .mosi_io_num = PIN_SPI_MOSI,
-        .miso_io_num = PIN_SPI_MISO,
-        .sclk_io_num = PIN_SPI_SCK,
-        .quadwp_io_num = -1,
-        .quadhd_io_num = -1,
-        .max_transfer_sz = 4096,
-    };
-    esp_err_t err = spi_bus_initialize(SD_SPI_HOST, &buscfg, SDSPI_DEFAULT_DMA);
-    if (err != ESP_OK && err != ESP_ERR_INVALID_STATE) {
-        ESP_LOGE(TAG, "spi_bus_initialize: %s", esp_err_to_name(err));
-        return NULL;
-    }
+    if (sd_bus_init() != ESP_OK) return NULL;
+    esp_err_t err;
 
     sdmmc_host_t host = SDSPI_HOST_DEFAULT();
     host.slot = SD_SPI_HOST;

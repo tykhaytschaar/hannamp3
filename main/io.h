@@ -34,7 +34,12 @@ void io_register_button_cb(btn_cb_t cb);
 void io_register_battery_cb(bat_cb_t cb);
 void io_register_lock_cb(lock_cb_t cb);
 
-// Egyszerű azonnali olvasás (UI indulásra)
+// Csak az akku-ADC init, gombok/battery task nélkül. Idempotens — a
+// low-battery boot-gate (main.c) hívja a teljes io_init előtt; az io_init
+// belül ugyanezt hívja.
+void io_battery_adc_init(void);
+
+// Egyszerű azonnali olvasás (UI indulásra). ADC-init nélkül 0-t ad vissza.
 uint16_t io_read_battery_mv(void);
 uint8_t  io_battery_percent_from_mv(uint16_t mv);
 

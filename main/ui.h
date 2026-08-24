@@ -14,6 +14,11 @@ void ui_init(void);
 // kész UI-ra. A háttérvilágítást az első frame után maga kapcsolja fel.
 void ui_play_boot_splash(void);
 
+// Lemerült akku képernyő: nagy piros üres-akku ikon fekete háttéren. A
+// low-battery boot-gate hívja (main.c), ui_init után; a backlightot a rá
+// következő ui_display_ready kapcsolja fel.
+void ui_show_low_battery(void);
+
 // USB MSC mód: statikus "USB Storage Mode" képernyő Exit gombbal
 // (have_card=false esetén "No SD card" üzenet). Az ui_init után hívandó.
 void ui_show_usb_mode_screen(bool have_card);

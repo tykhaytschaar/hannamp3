@@ -64,6 +64,9 @@
 #define BAT_DIVIDER_RATIO   2.0f          // (R1+R2)/R2 = 200k/100k
 #define BAT_FULL_MV         4200
 #define BAT_EMPTY_MV        3300
+// Boot-gate: ha a mért töltöttség <= ennyi %, nem bootolunk — csak egy üres-
+// akku jel 3 mp-ig, majd vissza deep sleepbe (lásd main.c low_battery_gate).
+#define BAT_SHUTOFF_PCT     1
 
 // -----------------------------------------------------------------------------
 // Display méret — ST7796U 3.5", natív 320×480 portré, fekvőben 480×320
