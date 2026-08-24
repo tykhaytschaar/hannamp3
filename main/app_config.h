@@ -58,7 +58,7 @@
 #define PIN_BTN_Y           GPIO_NUM_41
 
 // -----------------------------------------------------------------------------
-// Akku ADC: 100k:100k osztón át az 18650 (+) lábról
+// Akku ADC: 100k:100k osztón át a 104050 LiPo cella (+) lábáról
 // -----------------------------------------------------------------------------
 #define PIN_BAT_ADC         GPIO_NUM_4    // ADC1 CH3
 #define BAT_DIVIDER_RATIO   2.0f          // (R1+R2)/R2 = 200k/100k

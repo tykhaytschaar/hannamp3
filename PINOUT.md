@@ -140,15 +140,17 @@ Akkus üzem, hatékonyság-optimalizált lánccal:
 - **3.7 V LiPo → TP4056 töltőmodul → buck-boost konverter (3.3 V) → a dev kit
   `3V3` lába.** A kijelző, az SD és a PCM5102 is 3.3 V-ról megy, így nincs
   felesleges lineáris veszteség (a buck-boost ~90%).
-- **Az onboard 3V3 LDO le van forrasztva a panelról.** Ezért amikor USB-t
-  dugsz be (flash/monitor), az csak **adatot + GND-t** visz — az USB-5V → LDO
+- **Az onboard 3V3 LDO le van forrasztva a panelról.** Ezért az USB-5V → LDO
   → 3V3 út megszűnt, így **nincs két 3.3 V forrás ütközése** a 3V3 sínen.
   A natív-USB Serial-JTAG a chip 3V3-járól megy (a buck-boost adja), a UART-
   híd a saját USB-VBUS-áról kap tápot → mindkét flash-út működik.
-- A buck-boost és az akku **nem veszik fel a kapcsolatot az USB-vel**: az ESP
-  USB-VBUS-a nem megy vissza a töltőre, az akkut nem tölti/terheli.
-- **A 5V lábra ne köss semmit**, amíg az „IN-OUT" jumper zárt és USB is be
-  lehet dugva — különben az USB-VBUS visszatáplálná (lásd a klón devkit
-  IN-OUT áthidalóját).
+- **Töltés a devkit USB-portján át**: a devkit **5V lába (USB-VBUS) a TP4056
+  IN (5V) pontjaira van kötve** → USB bedugva a TP4056 tölti az akkut
+  (piros LED = tölt, kék/zöld = kész). A TP4056 modul saját USB-csatlakozója
+  nem használatos (nem ad életjelet — gyanú: hibás bemeneti út vagy hiányzó
+  USB-C CC-ellenállások C–C kábelnél).
+- **Egyszerre csak az egyik USB kapjon tápot** (devkit-port VAGY a TP-modul
+  sajátja) — különben két 5V forrás kerülne párhuzamosan a TP4056 IN-jére.
+- **A 5V láb foglalt**: az a töltő-betáp (VBUS → TP4056 IN), másra ne használd.
 - A PCM5102 terhelése kicsi; a háttérvilágítás (GPIO 16, LEDC PWM) a legnagyobb
   fogyasztó a 3V3 sínen.
